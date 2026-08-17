@@ -580,12 +580,6 @@ class CorrectBoundaryTests(TestCase):
 
     def test_negative_observed_balance_json_number_rejected_400_no_write(self):
         self.lot = make_lot(self.user, "Apples", "5")
-        response = self.client.post(
-            reverse(LOT_CORRECT, args=[self.lot.pk]),
-            {"observed_balance": -1, "reason": "too many"},
-            content_type="application/json",
-        )
-        # Without CSRF enforcement this still validates first; use a CSRF token.
         dashboard = self.client.get(reverse("inventory:dashboard"))
         token = self.client.cookies["csrftoken"].value
         response = self.client.post(
