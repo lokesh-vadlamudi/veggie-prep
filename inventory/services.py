@@ -23,14 +23,22 @@ Conventions
   product's, on add) unit exactly -- no implicit conversions (g vs kg,
   count vs each).
 * Every mutating service runs in a single transaction. Consume, discard,
-  and adjust additionally take a row lock (``select_for_update``) on the
-  lot, so concurrent mutations of the same lot are serialized on backends
-  that support locking reads. ``add_stock`` creates a fresh row and needs
-  no lock.
-* Service-created events are validated with ``full_clean`` before
-  insertion. Any raised exception rolls the whole transaction back.
+  adjust, and ``set_lot_balance`` additionally take a row lock
+  (``select_for_update``) on the lot, so concurrent mutations of the same
+  lot are serialized on backends that support locking reads.
+  ``add_stock`` creates a fresh row and needs no lock.
+  ``resolve_product`` serializes product resolution on the *household* row
+  lock so concurrent same-household add flows cannot create duplicate
+  products.
+* ``set_lot_balance`` derives its signed ADJUST delta only *after* the lot
+  lock is held, so the final balance always equals the observed value even
+  when a concurrent mutation lands in between.
+* Service-created rows (events, products) are validated with
+  ``full_clean`` before insertion. Any raised exception rolls the whole
+  transaction back.
 """
 
+import re
 from datetime import date
 from decimal import Decimal, InvalidOperation
 
@@ -44,10 +52,17 @@ from .exceptions import (
     InvalidUnit,
     UnitMismatch,
 )
-from .models import InventoryEvent, Product, StockLot
+from .models import Household, InventoryEvent, Product, StockLot
 
 #: Quantities are stored with exactly this precision.
 THREE_PLACES = Decimal("0.001")
+
+_WHITESPACE_RE = re.compile(r"\s+")
+
+
+def normalize_product_name(value: str) -> str:
+    """Trim and collapse runs of whitespace to single spaces."""
+    return _WHITESPACE_RE.sub(" ", value.strip())
 
 
 def lot_balance(lot):
@@ -206,6 +221,45 @@ def add_stock(
     return lot
 
 
+@transaction.atomic
+def resolve_product(*, household, raw_name, unit):
+    """Resolve the household's product for ``raw_name``, creating it if new.
+
+    The name is normalized with :func:`normalize_product_name` and matched
+    case-insensitively against the household's existing products, so every
+    write path reuses the same product row instead of spawning duplicates.
+    A name that already exists with a different unit is incompatible and
+    rejected with :class:`UnitMismatch` (no row is written).
+
+    Resolution is serialized on the household's row lock: concurrent
+    same-household resolutions wait for the first transaction to commit and
+    then find the created row instead of racing to a duplicate. New
+    products are validated with ``full_clean`` before insertion.
+    """
+    _require_known_unit(unit)
+    name = normalize_product_name(raw_name)
+    if not name:
+        raise ValueError("Product name must not be empty.")
+    locked_household = (
+        Household.objects.select_for_update().filter(pk=household.pk).first()
+    )
+    if locked_household is None:
+        raise HouseholdMismatch("Household does not exist.")
+    existing = Product.objects.filter(household=household, name__iexact=name).first()
+    if existing is not None:
+        if existing.unit != unit:
+            raise UnitMismatch(
+                f"Product “{existing.name}” already exists in this household "
+                f"with unit “{existing.unit}”. Use that unit or choose a "
+                "different product name."
+            )
+        return existing
+    product = Product(household=household, name=name, unit=unit)
+    product.full_clean()  # validate before insertion
+    product.save()
+    return product
+
+
 def _reduce_stock(*, household, lot, quantity, unit, event_type, verb, note=""):
     """Shared path for consume/discard: subtract a positive amount."""
     quantity = _require_positive(_as_exact_quantity(quantity, "quantity"))
@@ -290,5 +344,37 @@ def adjust_stock(*, household, lot, delta, unit, note=""):
         event_type=InventoryEvent.EventType.ADJUST,
         quantity=delta,
         unit=unit,
+        note=note,
+    )
+
+
+@transaction.atomic
+def set_lot_balance(*, household, lot, observed_balance, note=""):
+    """Set ``lot``'s balance to exactly ``observed_balance`` with one ADJUST.
+
+    The lot row is locked *first*; the current balance and the signed
+    delta are derived only after the lock is held, so a concurrent
+    consume/discard/adjust that lands in between can never leave the lot
+    at the wrong final balance. ``observed_balance`` must be an exact,
+    non-negative decimal. A no-op correction (observed == current) is
+    rejected without writing. Returns the ADJUST event.
+    """
+    observed = _as_exact_quantity(observed_balance, "observed balance")
+    if observed < 0:
+        raise InvalidQuantity("Observed balance must not be negative.")
+    locked = _lock_lot(household, lot)
+    current = lot_balance(locked)
+    delta = observed - current
+    if delta == 0:
+        raise InvalidAdjustment(
+            "No-op correction rejected: the observed balance "
+            f"({observed}) already matches the current balance ({current})."
+        )
+    return _make_event(
+        household=household,
+        lot=locked,
+        event_type=InventoryEvent.EventType.ADJUST,
+        quantity=delta,
+        unit=locked.unit,
         note=note,
     )

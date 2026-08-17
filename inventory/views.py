@@ -8,8 +8,6 @@ domain rules and transactional guarantees; views only map service errors
 back onto form fields.
 """
 
-import re
-from decimal import Decimal
 from datetime import timedelta
 
 from django.contrib import messages
@@ -31,14 +29,8 @@ from .exceptions import (
     UnitMismatch,
 )
 from .forms import AddStockForm, CorrectionForm, LotMutationForm
-from .models import Product, StockLot
-
-_WHITESPACE_RE = re.compile(r"\s+")
-
-
-def normalize_product_name(value: str) -> str:
-    """Trim and collapse runs of whitespace to single spaces."""
-    return _WHITESPACE_RE.sub(" ", value.strip())
+from .models import StockLot
+from .services import normalize_product_name  # noqa: F401  (re-exported)
 
 
 def current_household(user):
@@ -121,8 +113,10 @@ class AddStockView(LoginRequiredMixin, FormView):
             data = form.cleaned_data
             try:
                 with transaction.atomic():
-                    product = self._resolve_product(
-                        household, data["product_name"], data["unit"]
+                    product = services.resolve_product(
+                        household=household,
+                        raw_name=data["product_name"],
+                        unit=data["unit"],
                     )
                     services.add_stock(
                         household=household,
@@ -148,26 +142,6 @@ class AddStockView(LoginRequiredMixin, FormView):
                 )
                 return redirect(self.get_success_url())
         return self.render_to_response(self.get_context_data(form=form))
-
-    def _resolve_product(self, household, raw_name, unit):
-        """Reuse the household's product case-insensitively; else create it.
-
-        Raises :class:`UnitMismatch` when the name already exists in a
-        different unit (incompatible reuse is rejected).
-        """
-        name = normalize_product_name(raw_name)
-        existing = Product.objects.filter(
-            household=household, name__iexact=name
-        ).first()
-        if existing is not None:
-            if existing.unit != unit:
-                raise UnitMismatch(
-                    f"Product “{existing.name}” already exists in this household "
-                    f"with unit “{existing.unit}”. Use that unit or choose a "
-                    "different product name."
-                )
-            return existing
-        return Product.objects.create(household=household, name=name, unit=unit)
 
 
 @login_required
@@ -223,16 +197,25 @@ class _LotMutationView(LoginRequiredMixin, View):
             data = form.cleaned_data
             try:
                 self.perform_action(request.user, lot, data)
-            except InvalidQuantity as exc:
-                form.add_error("quantity", str(exc))
-            except (InvalidAdjustment, InsufficientStock, InventoryServiceError) as exc:
-                form.add_error(None, str(exc))
+            except (
+                InvalidQuantity,
+                InvalidAdjustment,
+                InsufficientStock,
+                InventoryServiceError,
+            ) as exc:
+                form.add_error(self.field_for_exception(exc), str(exc))
             else:
                 messages.success(request, self.success_message(lot, data))
                 return redirect("inventory:lot_detail", pk=lot.pk)
         return render(
             request, "inventory/lot_detail.html", self._context(form=form)
         )
+
+    def field_for_exception(self, exc):
+        """Form field to display ``exc`` on; ``None`` renders it non-field."""
+        if isinstance(exc, InvalidQuantity):
+            return "quantity"
+        return None
 
     def perform_action(self, user, lot, data):
         raise NotImplementedError
@@ -276,25 +259,26 @@ class DiscardView(_LotMutationView):
 
 
 class CorrectView(_LotMutationView):
-    """Correction: observed balance + required reason → signed ADJUST delta."""
+    """Correction: observed balance + required reason → signed ADJUST delta.
+
+    The balance pre-read and delta derivation happen inside
+    :func:`inventory.services.set_lot_balance` *after* the lot row lock, so
+    a concurrent mutation can never leave the lot off the observed balance.
+    """
 
     action = "correct"
     form_class = CorrectionForm
 
+    def field_for_exception(self, exc):
+        if isinstance(exc, InvalidQuantity):
+            return "observed_balance"
+        return super().field_for_exception(exc)
+
     def perform_action(self, user, lot, data):
-        observed = Decimal(data["observed_balance"])
-        current = services.lot_balance(lot)
-        delta = observed - current
-        if delta == 0:
-            raise InvalidAdjustment(
-                "No-op correction rejected: the observed balance "
-                f"({observed}) already matches the current balance ({current})."
-            )
-        services.adjust_stock(
+        services.set_lot_balance(
             household=current_household(user),
             lot=lot,
-            delta=delta,
-            unit=lot.unit,
+            observed_balance=data["observed_balance"],
             note=data["reason"],
         )
 

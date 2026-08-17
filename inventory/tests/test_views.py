@@ -17,6 +17,11 @@ from django.test import Client, TestCase
 from django.urls import reverse
 
 from inventory import services
+from inventory.exceptions import (
+    InventoryServiceError,
+    InvalidQuantity,
+    InsufficientStock,
+)
 from inventory.models import Product, StockLot
 
 User = get_user_model()
@@ -294,6 +299,24 @@ class AddFlowTests(TestCase):
         self.assertContains(response, "Add stock")
         self.assertContains(response, "csrfmiddlewaretoken")
 
+    def test_add_rolls_back_created_product_when_service_fails(self):
+        """Product resolution succeeds but the lot write fails: the whole
+        add transaction rolls back, no partial product/lot rows remain, and
+        the failure is shown to the user."""
+        with mock.patch.object(
+            services, "add_stock", side_effect=InventoryServiceError("boom")
+        ):
+            response = self.post_add(product_name="Zucchini")
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "boom")
+        self.assertEqual(
+            Product.objects.filter(
+                household=self.user.household, name__iexact="zucchini"
+            ).count(),
+            0,
+        )
+        self.assertEqual(self.user.household.lots.count(), 0)
+
 
 class LotDetailTests(TestCase):
     """Lot detail: balance, metadata, no-expiry label, audit history."""
@@ -551,6 +574,31 @@ class MutationTests(TestCase):
         self.assertRedirects(
             response, reverse("inventory:lot_detail", args=[self.lot.pk])
         )
+
+    def test_consume_quantity_error_maps_to_quantity_field(self):
+        """Service-level quantity errors render on the consume/discard
+        quantity field, not as non-field errors."""
+        from inventory.views import ConsumeView
+
+        view = ConsumeView()
+        self.assertEqual(
+            view.field_for_exception(InvalidQuantity("bad")), "quantity"
+        )
+        self.assertIsNone(
+            view.field_for_exception(InsufficientStock("over balance"))
+        )
+
+    def test_correct_value_error_maps_to_observed_balance_field(self):
+        """Correction value errors render on the observed_balance field;
+        adjustment errors (e.g. no-op) stay non-field."""
+        from inventory.views import CorrectView
+
+        view = CorrectView()
+        self.assertEqual(
+            view.field_for_exception(InvalidQuantity("bad")),
+            "observed_balance",
+        )
+        self.assertIsNone(view.field_for_exception(InsufficientStock("x")))
 
 
 class DashboardExpiryTests(TestCase):
