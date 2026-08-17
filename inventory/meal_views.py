@@ -9,6 +9,7 @@ the form with a recoverable, user-safe error banner and no partial data.
 from django.contrib import messages
 from django.contrib.auth.decorators import login_required
 from django.contrib.auth.mixins import LoginRequiredMixin
+from django.core.exceptions import ObjectDoesNotExist
 from django.shortcuts import get_object_or_404, redirect, render
 from django.views import View
 from django.views.generic import FormView, TemplateView
@@ -39,7 +40,9 @@ def cook_state(suggestion):
     if suggestion.status == MealSuggestion.Status.COOKED:
         try:
             return "cooked", suggestion.meal_event
-        except Exception:
+        except ObjectDoesNotExist:
+            # A COOKED status without the related event is inconsistent
+            # state; render the cooked state without a timestamp.
             return "cooked", None
     if suggestion.status == MealSuggestion.Status.REJECTED:
         return "rejected", None
@@ -149,17 +152,26 @@ class CookSuggestionView(LoginRequiredMixin, View):
     no CSRF bypass).
     """
 
+    http_method_names = ["post", "get", "head", "options"]
+
     def get(self, request, *args, **kwargs):
-        # Mutations are POST-only; a GET confirms ownership (404 if not)
-        # and falls back to the detail page, matching the lot actions.
+        """GET is not a valid cook method.
+
+        Foreign / unknown pks 404 first (household-scoped lookup), and an
+        owned suggestion gets a 405 with ``Allow: POST`` so clients learn
+        the correct method.
+        """
+        from django.http import HttpResponseNotAllowed
         owned_suggestion(request.user, self.kwargs["pk"])
-        return redirect("inventory:meal_detail", pk=self.kwargs["pk"])
+        return HttpResponseNotAllowed(
+            ["POST"],
+        )
 
     def post(self, request, *args, **kwargs):
         pk = self.kwargs["pk"]
         suggestion = owned_suggestion(request.user, pk)
         try:
-            event = services.confirm_cook(
+            services.confirm_cook(
                 household=current_household(request.user),
                 suggestion=suggestion,
             )

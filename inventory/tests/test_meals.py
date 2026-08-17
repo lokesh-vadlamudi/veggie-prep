@@ -16,6 +16,7 @@ from datetime import timedelta
 from decimal import Decimal
 import json
 import os
+import uuid
 import socket
 import urllib.error
 from pathlib import Path
@@ -1070,18 +1071,16 @@ class CookViewTests(TestCase):
             0,
         )
 
-    def test_cook_is_post_only_get_falls_back_to_detail(self):
+    def test_cook_is_post_only_owned_get_is_405_with_allow_post(self):
         self._login("cook_a")
         suggestion = self._fully_owned_suggestion(
             self._cookable_suggestion(self.user_a)
         )
         response = self.client.get(
             reverse("inventory:meal_cook", args=[suggestion.pk]),
-            follow=True,
         )
-        self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.redirect_chain[0][0],
-                         reverse(DETAIL, args=[suggestion.pk]))
+        self.assertEqual(response.status_code, 405)
+        self.assertIn("POST", response["Allow"])
         self.assertEqual(
             suggestion.status, MealSuggestion.Status.SUGGESTED
         )
@@ -1090,6 +1089,25 @@ class CookViewTests(TestCase):
                 event_type=InventoryEvent.EventType.CONSUME
             ).count(),
             0,
+        )
+
+    def test_cook_get_foreign_and_unknown_suggestion_are_404(self):
+        self._login("cook_a")
+        foreign = self._fully_owned_suggestion(
+            self._cookable_suggestion(self.user_b)
+        )
+        self.assertEqual(
+            self.client.get(
+                reverse("inventory:meal_cook", args=[foreign.pk])
+            ).status_code,
+            404,
+        )
+        unknown = uuid.uuid4()
+        self.assertEqual(
+            self.client.get(
+                reverse("inventory:meal_cook", args=[unknown])
+            ).status_code,
+            404,
         )
 
     # -- success + PRG + exact ledger deductions --------------------------------
