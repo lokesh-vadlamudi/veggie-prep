@@ -355,6 +355,7 @@ input[type="number"] { min-width: 0; }
   border-radius: 999px;
   font-size: 0.8rem;
   border: 1px solid var(--line);
+  white-space: nowrap; /* keep status pills from splitting mid-word at narrow widths */
 }
 .status-suggested { border-color: var(--accent, #2f6f4f); color: var(--accent-label-ink, #14501f); }
 .status-cooked { border-color: var(--ok-ink, #2f6f4f); color: var(--ok-ink, #2f6f4f); }
@@ -392,6 +393,7 @@ input[type="number"] { min-width: 0; }
   font-size: 0.78rem;
   border: 1px solid var(--accent, #2f6f4f);
   color: var(--accent-label-ink, #14501f);
+  white-space: nowrap; /* keep rescue badge from splitting mid-word at narrow widths */
 }
 
 .rescue-panel {

@@ -815,6 +815,27 @@ class CsrfAndTemplateTests(TestCase):
         response = self.client.get(reverse(DASHBOARD))
         self.assertContains(response, "styles.css")
 
+    def test_narrow_status_pills_do_not_split_mid_word(self):
+        # Regression: at 390px the suggested status pill in meal history split
+        # mid-word because table cells use overflow-wrap: anywhere. The pills
+        # must opt out with white-space: nowrap.
+        from pathlib import Path
+
+        css = (
+            Path(__file__).resolve().parents[1]
+            / "static"
+            / "inventory"
+            / "styles.css"
+        ).read_text(encoding="utf-8")
+        for selector in (".status {", ".rescued-badge {"):
+            rule = css.split(selector, 1)[1].split("}", 1)[0]
+            self.assertIn(
+                "white-space: nowrap;",
+                rule,
+                f"{selector!r} rule must set white-space: nowrap so the "
+                "pill does not wrap mid-word at narrow (390px) widths",
+            )
+
 
 class NormalizeProductNameTests(TestCase):
     def test_trim_and_collapse(self):
