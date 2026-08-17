@@ -315,6 +315,20 @@ input[type="number"] { min-width: 0; }
   min-width: 0;
 }
 
+/* The 5-column history/data table (lot detail + meal pages) gets a 38rem
+   minimum width below the 600px breakpoint (media query below) so the
+   .table-wrap scrolls horizontally instead of squeezing columns to
+   ~332px; at 390px the scrollable region is 360px and the table keeps
+   608px. Desktop (≥601px) is unaffected. */
+.history-table {
+  min-width: 0;
+}
+
+.history th,
+.history-table th {
+  white-space: nowrap; /* keep header labels on one line at narrow widths */
+}
+
 .history th,
 .history td {
   text-align: left;

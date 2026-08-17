@@ -408,6 +408,60 @@ class LotDetailTests(TestCase):
         self.assertContains(response, "discard")
         self.assertContains(response, "adjust")
 
+    def test_history_table_narrow_width_is_scrollable_headers_unsplit(self):
+        # Regression: at a 390px viewport the lot-detail history table was
+        # squeezed to ~332px and Event/Quantity/Unit/Note headers split
+        # mid-word. The .history-table must opt into the same 38rem
+        # minimum width as the other meal/data tables so the .table-wrap
+        # scrolls horizontally, and its headers must stay on one line.
+        from pathlib import Path
+
+        lot = make_lot(self.user, "Onion", "5", "count")
+        response = self.detail(lot)
+        self.assertEqual(response.status_code, 200)
+        # The lot detail history table carries the shared data-table class.
+        self.assertContains(response, '<table class="history-table">')
+        self.assertContains(response, 'class="table-wrap"')
+
+        css = (
+            Path(__file__).resolve().parents[1]
+            / "static"
+            / "inventory"
+            / "styles.css"
+        ).read_text(encoding="utf-8")
+        # The focused selector keeps desktop (min-width: 0, no change to
+        # existing layout) and the shared 600px media query supplies the
+        # 38rem minimum width for the narrow screen.
+        self.assertIn(".history-table {", css)
+        rule = css.split(".history-table {", 1)[1].split("}", 1)[0]
+        self.assertIn("min-width: 0", rule)
+        narrow_block = css.split(
+            "@media (max-width: 600px) {", 1
+        )[1].split("@media", 1)[0]
+        narrow_rule = narrow_block.split(
+            ".ingredients-table, .history-table {", 1
+        )[1].split("}", 1)[0]
+        self.assertIn(
+            "min-width: 38rem",
+            narrow_rule,
+            "the 600px media query must give .history-table the shared "
+            "min-width: 38rem so /lots/<uuid>/ scrolls instead of "
+            "breaking headers mid-word",
+        )
+        self.assertIn(
+            "font-size: 0.9rem",
+            narrow_rule,
+        )
+        header_rule = css.split(
+            ".history th,\n.history-table th {", 1
+        )[1].split("}", 1)[0]
+        self.assertIn(
+            "white-space: nowrap;",
+            header_rule,
+            "history table headers must not split mid-word at narrow "
+            "(390px) widths",
+        )
+
     def test_history_empty_state(self):
         product = Product.objects.create(
             household=self.user.household, name="Kale", unit="g"
