@@ -84,6 +84,30 @@ Responses are size-capped, and malformed JSON, schema violations, unsupported
 units, or invalid quantities produce a recoverable error on the form with no
 partial suggestion and no inventory change.
 
+## API (v1)
+
+Versioned inventory API under `/api/v1/`, session-authenticated with CSRF
+enforced (same cookies as the web app — POST the `X-CSRFToken` header from
+the `csrftoken` cookie, as a browser does).
+
+All lots belong to the requester's household; lots in other households or
+with unknown UUIDs return a stable `404` envelope. Quantities are exact
+three-decimal strings on the wire (input accepts finite decimals with at
+most 3 places; booleans, non-finite values, and imprecise values are
+rejected with `400`).
+
+| Method & path | Purpose |
+| --- | --- |
+| `GET /api/v1/inventory/lots/` | Paginated lots. Filters: `location`, `expiry_group`, `include_empty=true\|false` (default hides zero-balance lots), `page`, `page_size`. |
+| `POST /api/v1/inventory/lots/` | Add stock: `product_name`, `quantity`, `unit`, optional `location`, `purchased_at`, `expires_on`, `note`. `201` with `Location`. |
+| `GET /api/v1/inventory/lots/<uuid>/` | Lot detail with ledger-derived `balance`. |
+| `GET /api/v1/inventory/lots/<uuid>/events/` | Paginated ledger history (`quantity` absolute, `signed_quantity` ledger-signed). |
+| `POST /api/v1/inventory/lots/<uuid>/consume/` | `quantity` (positive), optional `note`. `409 insufficient_stock` on over-consume. |
+| `POST /api/v1/inventory/lots/<uuid>/discard/` | `quantity` (positive), optional `note`. |
+| `POST /api/v1/inventory/lots/<uuid>/correct/` | `observed_balance` (≥ 0), required `reason`. `409 no_op_correction` when unchanged. |
+
+Errors are a stable envelope: `{"error": {"code": ..., "message": ..., "fields": {...}}}` with codes `not_authenticated`, `csrf_failed`, `not_found`, `validation_error`, `insufficient_stock`, `no_op_correction`, `service_error`. All writes go through the transactional service layer only.
+
 ## Tests
 
 ```bash
@@ -100,5 +124,6 @@ MealSuggestion, MealIngredient), the transactional inventory service layer,
 authenticated web workflow (dashboard, add/consume/discard/correct,
 auth/logout), and AI meal suggestion generation with deterministic
 reconciliation (form, result, history; household-scoped 404s; provider
-failure taxonomy). Deferred: cook-confirmation flow for suggestions,
-DRF/API exposure, and provider key/ops configuration.
+failure taxonomy), and the versioned DRF inventory API
+(`inventory/api/`, `/api/v1/inventory/lots/...`). Deferred: meal API,
+cook-confirmation flow for suggestions, and provider key/ops configuration.

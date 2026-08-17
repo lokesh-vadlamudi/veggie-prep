@@ -121,6 +121,10 @@ REST_FRAMEWORK = {
     "DEFAULT_PERMISSION_CLASSES": (
         "rest_framework.permissions.IsAuthenticated",
     ),
+    # Stable JSON error envelopes for the /api/v1/ boundary. The handler
+    # returns None for non-API exceptions so HTML pages keep their usual
+    # error behaviour.
+    "EXCEPTION_HANDLER": "inventory.api.views._api_exception_handler",
 }
 
 # --- I18N / static --------------------------------------------------------------
