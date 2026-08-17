@@ -415,6 +415,37 @@ class ValidatorTests(TestCase):
         )
         self.assertEqual(proposal.ingredients[0].quantity, Decimal("3"))
 
+    def test_fractional_json_floats_parse_as_their_decimal_values(self):
+        # Regression: provider JSON numbers like 0.1 decode to Python
+        # floats; validation must preserve the decimal JSON value, not the
+        # float's binary expansion (Decimal(0.1) is 0.10000000000000000555...
+        # and failed the 3-dp-exact rule).
+        for value, exact in ((0.1, "0.1"), (0.2, "0.2"), (0.3, "0.3"),
+                             (1.1, "1.1"), (0.5, "0.5"), (1.25, "1.25"),
+                             (0.001, "0.001")):
+            proposal = validate_proposal(
+                valid_payload(
+                    ingredients=[{"name": "Onion", "unit": "g",
+                                  "quantity": value}]
+                )
+            )
+            self.assertEqual(proposal.ingredients[0].quantity,
+                             Decimal(exact), msg=f"quantity {value!r}")
+
+    def test_imprecise_or_out_of_range_floats_still_rejected(self):
+        # 4 decimal places in the JSON literal.
+        self._expect_rejected("0.0001", valid_payload(ingredients=[
+            {"name": "Onion", "unit": "g", "quantity": 0.0001}]))
+        # 0.1 + 0.2 is 0.30000000000000004, not 0.3.
+        self._expect_rejected("0.1+0.2 float", valid_payload(ingredients=[
+            {"name": "Onion", "unit": "g", "quantity": 0.1 + 0.2}]))
+        # Negative float.
+        self._expect_rejected("-0.1", valid_payload(ingredients=[
+            {"name": "Onion", "unit": "g", "quantity": -0.1}]))
+        # Oversized float (1e10 > MAX_QUANTITY).
+        self._expect_rejected("1e10", valid_payload(ingredients=[
+            {"name": "Onion", "unit": "g", "quantity": 1e10}]))
+
     def test_duplicate_ingredient_rejected(self):
         payload = valid_payload(ingredients=[
             {"name": "Onion", "unit": "count", "quantity": 1},
@@ -482,6 +513,27 @@ class OpenAIProviderTests(TestCase):
                                    fake_urlopen):
                 self._provider().generate([], {})
         self.assertEqual(captured["headers"].get("Authorization"), "Bearer k-123")
+
+    def test_fractional_json_numbers_are_exact_after_provider_parse(self):
+        # Real JSON round trip: the completion's "0.1" decodes to the float
+        # 0.1 and must validate to Decimal("0.1"), not the binary expansion.
+        payload = valid_payload(ingredients=[
+            {"name": "Onion", "unit": "g", "quantity": 0.1},
+            {"name": "Flour", "unit": "kg", "quantity": 0.2},
+            {"name": "Pepper", "unit": "count", "quantity": 0.3},
+            {"name": "Garlic", "unit": "l", "quantity": 1.1},
+        ])
+        with mock.patch.dict(os.environ, self.ENV):
+            with mock.patch.object(openai_module.urllib.request, "urlopen",
+                                   return_value=FakeHTTPResponse(
+                                       chat_response(json.dumps(payload)))):
+                decoded = self._provider().generate([], {})
+        proposal = validate_proposal(decoded, provider_model="test-model")
+        self.assertEqual(
+            [i.quantity for i in proposal.ingredients],
+            [Decimal("0.1"), Decimal("0.2"), Decimal("0.3"),
+             Decimal("1.1")],
+        )
 
     def test_missing_config_raises_config_error(self):
         cases = (
@@ -798,6 +850,38 @@ class ReconciliationTests(TestCase):
         self.assertEqual(ingredient.missing_quantity, Decimal("1.000"))
         self.assertEqual(ingredient.allocations, [])
 
+    def test_fractional_quantities_persisted_and_reconciled_exactly(self):
+        # Regression: fractional JSON numbers (0.1/0.2/0.3/1.1) must be
+        # accepted and reconciled with their exact decimal values.
+        suggestion, _ = self._generate([
+            {"name": "Flour", "unit": "g", "quantity": 1.1},
+            {"name": "Garlic", "unit": "g", "quantity": 0.2},
+        ])
+        flour = suggestion.ingredients.get(name="Flour", unit="g")
+        self.assertEqual(flour.required_quantity, Decimal("1.1"))
+        self.assertEqual(flour.owned_quantity, Decimal("1.1"))
+        self.assertEqual(flour.missing_quantity, Decimal("0.000"))
+        self.assertEqual(Decimal(flour.allocations[0]["quantity"]),
+                         Decimal("1.1"))
+        self.assertFalse(flour.rescued)
+        garlic = suggestion.ingredients.get(name="Garlic", unit="g")
+        self.assertEqual(garlic.required_quantity, Decimal("0.2"))
+        self.assertEqual(garlic.owned_quantity, Decimal("0.2"))
+        self.assertEqual(garlic.missing_quantity, Decimal("0.000"))
+        # 0.2 g is fully taken from the expiring-today lot.
+        self.assertEqual(garlic.allocations[0]["lot"],
+                         str(self.lot_garlic_soon.pk))
+        self.assertTrue(garlic.rescued)
+
+    def test_imprecise_float_quantity_writes_nothing(self):
+        with self.assertRaises(AIMalformedOutputError):
+            self._generate([
+                {"name": "Onion", "unit": "count", "quantity": 0.0001},
+            ])
+        self.assertEqual(MealSuggestion.objects.count(), 0)
+        self.assertEqual(MealIngredient.objects.count(), 0)
+        self.assertEqual(InventoryEvent.objects.count(), self.event_count)
+
     def test_expired_lot_not_matched_unless_confirmed(self):
         suggestion, _ = self._generate([
             {"name": "Kale", "unit": "count", "quantity": 1},
@@ -996,6 +1080,40 @@ class ViewFlowTests(TestCase):
         # Form still present and usable; no rows created.
         self.assertIn("id_servings", content)
         self.assertEqual(MealSuggestion.objects.count(), 0)
+
+    def test_fractional_quantity_provider_path_completes_prg(self):
+        # Regression: a provider JSON number like 0.1 was rejected as "not
+        # exact to 3 decimal places", so a valid completion with a numeric
+        # fractional ingredient retried forever. The real provider path
+        # (HTTP + default json.loads float decoding) must complete the PRG
+        # flow and persist the exact decimal value.
+        self._login("flow_a")
+        payload = valid_payload(ingredients=[
+            {"name": "Onion", "unit": "count", "quantity": 3},
+            {"name": "Flour", "unit": "g", "quantity": 0.1},
+        ])
+        with mock.patch.dict(os.environ, {
+            "AI_BASE_URL": "http://ai.test", "AI_MODEL": "test-model",
+            "AI_API_KEY": "", "AI_TIMEOUT": "",
+        }):
+            with mock.patch.object(
+                    openai_module.urllib.request, "urlopen",
+                    return_value=FakeHTTPResponse(
+                        chat_response(json.dumps(payload)))):
+                response = self.client.post(reverse(SUGGEST), FORM_DATA,
+                                            follow=True)
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(len(response.redirect_chain), 1)
+        suggestion = MealSuggestion.objects.get()
+        self.assertEqual(response.redirect_chain[0][0],
+                         reverse(DETAIL, args=[suggestion.pk]))
+        content = response.content.decode("utf-8")
+        self.assertNotIn("Could not generate a meal", content)
+        self.assertIn("0.100 g", content)  # missing Flour quantity
+        ingredient = suggestion.ingredients.get(name="Flour", unit="g")
+        self.assertEqual(ingredient.required_quantity, Decimal("0.1"))
+        self.assertEqual(ingredient.owned_quantity, Decimal("0.000"))
+        self.assertEqual(ingredient.missing_quantity, Decimal("0.1"))
 
     def test_history_lists_own_suggestions(self):
         self._login("flow_a")

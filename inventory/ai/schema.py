@@ -114,7 +114,13 @@ def _exact_quantity(value, field: str) -> Decimal:
         _fail(f"'{field}' must be a positive number.")
     if isinstance(value, (int, float)):
         try:
-            quantity = Decimal(value)
+            # Parse via the exact decimal representation: str() of a
+            # float is its shortest round-trip form, i.e. the provider's
+            # JSON literal (str(0.1) == "0.1"). Decimal(value) would
+            # instead capture the binary expansion (Decimal(0.1) is
+            # 0.10000000000000000555...), wrongly rejecting valid
+            # 3-dp-exact quantities like 0.1/0.2/0.3/1.1.
+            quantity = Decimal(str(value))
         except InvalidOperation:
             _fail(f"'{field}' must be a positive number.")
     elif isinstance(value, str):
