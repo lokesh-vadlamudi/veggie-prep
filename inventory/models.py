@@ -324,18 +324,15 @@ class MealIngredient(UUIDModel):
 
 
 class MealEvent(UUIDModel):
-    """An immutable record that a suggested meal was cooked.
+    """An immutable record of a successful cook of a suggested meal.
 
     Household-scoped, exactly one per suggestion (``OneToOne`` to
-    ``MealSuggestion``): cook confirmation creates a single event that
-    freezes the outcome and when it happened. Append-only like
+    ``MealSuggestion``): cook confirmation creates a single event stamped
+    with ``cooked_at``. A failed cook rolls back with no record, so this
+    model persists no outcome or failure state. Append-only like
     ``InventoryEvent``: ``save`` refuses to update an existing event and
     ``delete`` always raises.
     """
-
-    class Outcome(models.TextChoices):
-        SUCCESS = "success", "success"
-        FAILED = "failed", "failed"
 
     household = models.ForeignKey(
         Household, on_delete=models.CASCADE, related_name="meal_events"
@@ -343,16 +340,13 @@ class MealEvent(UUIDModel):
     suggestion = models.OneToOneField(
         MealSuggestion, on_delete=models.CASCADE, related_name="meal_event"
     )
-    outcome = models.CharField(
-        max_length=10, choices=Outcome.choices, default=Outcome.SUCCESS
-    )
-    created_at = models.DateTimeField(auto_now_add=True)
+    cooked_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
-        ordering = ("-created_at",)
+        ordering = ("-cooked_at",)
 
     def __str__(self):
-        return f"MealEvent {self.id} ({self.outcome}, suggestion {self.suggestion_id})"
+        return f"MealEvent {self.id} (suggestion {self.suggestion_id})"
 
     def clean(self):
         super().clean()

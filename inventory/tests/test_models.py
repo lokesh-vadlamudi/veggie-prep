@@ -313,36 +313,32 @@ class MealEventTests(TestCase):
     def _event(self, household, suggestion):
         return MealEvent.objects.create(household=household, suggestion=suggestion)
 
-    def test_create_event_with_uuid_pk_and_timestamp(self):
+    def test_create_event_with_uuid_pk_and_cooked_at(self):
         household = make_household()
         suggestion = make_suggestion(household)
         event = self._event(household, suggestion)
         self.assertEqual(type(event.pk), uuid.UUID)
-        self.assertEqual(event.outcome, MealEvent.Outcome.SUCCESS)
-        self.assertIsNotNone(event.created_at)
+        self.assertIsNotNone(event.cooked_at)
         self.assertEqual(household.meal_events.get(), event)
 
-    def test_outcome_choices_validated(self):
-        household = make_household()
-        suggestion = make_suggestion(household)
-        event = MealEvent(
-            household=household,
-            suggestion=suggestion,
-            outcome="exploded",
-        )
-        with self.assertRaises(ValidationError):
-            event.full_clean()
+    def test_no_persisted_outcome_or_failure_state(self):
+        """Failures roll back with no record: the model exposes only
+        ``cooked_at`` and persists no outcome/failure field."""
+        field_names = [f.name for f in MealEvent._meta.get_fields()]
+        self.assertNotIn("outcome", field_names)
+        self.assertNotIn("created_at", field_names)
+        self.assertIn("cooked_at", field_names)
 
     def test_exactly_one_event_per_suggestion(self):
         household = make_household()
         suggestion = make_suggestion(household)
-        self._event(household, suggestion)
+        event = self._event(household, suggestion)
         with self.assertRaises(IntegrityError):
             with transaction.atomic():
                 self._event(household, suggestion)
         # Reverse accessor sees the single event.
         suggestion.refresh_from_db()
-        self.assertEqual(suggestion.meal_event.outcome, "success")
+        self.assertEqual(suggestion.meal_event.pk, event.pk)
 
     def test_event_must_share_suggestion_household(self):
         a = make_household("House A")
@@ -362,13 +358,13 @@ class MealEventTests(TestCase):
     def test_cannot_update_existing_event(self):
         household = make_household()
         event = self._event(household, make_suggestion(household))
-        event.outcome = MealEvent.Outcome.FAILED
+        event.household = make_household("House 2")
         with self.assertRaises(ValueError):
             event.save()
         with self.assertRaises(ValueError):
-            event.save(update_fields=["outcome"])
+            event.save(update_fields=["household"])
         reloaded = MealEvent.objects.get(pk=event.pk)
-        self.assertEqual(reloaded.outcome, "success")
+        self.assertEqual(reloaded.household, household)
 
     def test_cannot_delete_existing_event(self):
         household = make_household()

@@ -99,13 +99,7 @@ class MealEventInline(admin.TabularInline):
 
     model = MealEvent
     extra = 0
-    readonly_fields = (
-        "id",
-        "household",
-        "suggestion",
-        "outcome",
-        "created_at",
-    )
+    readonly_fields = ("id", "household", "suggestion", "cooked_at")
 
     def has_add_permission(self, request):
         return False
@@ -220,22 +214,10 @@ class MealIngredientAdmin(admin.ModelAdmin):
 class MealEventAdmin(admin.ModelAdmin):
     """Read-only: events are append-only and never edited or removed."""
 
-    list_display = (
-        "id",
-        "suggestion",
-        "outcome",
-        "household",
-        "created_at",
-    )
-    list_filter = ("outcome", "household")
+    list_display = ("id", "suggestion", "household", "cooked_at")
+    list_filter = ("household",)
     search_fields = ("suggestion__title",)
-    readonly_fields = (
-        "id",
-        "household",
-        "suggestion",
-        "outcome",
-        "created_at",
-    )
+    readonly_fields = ("id", "household", "suggestion", "cooked_at")
     actions = None
 
     def has_add_permission(self, request):
