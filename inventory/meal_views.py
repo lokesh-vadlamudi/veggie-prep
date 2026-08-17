@@ -81,12 +81,29 @@ def suggestion_detail(request, pk):
             pk__in=lot_ids, household=current_household(request.user)
         )
     }
+    rescued_allocations = []
+    for ingredient in rescued_ingredients:
+        for allocation in ingredient.allocations or []:
+            if not allocation.get("rescued"):
+                continue
+            lot = lots.get(str(allocation.get("lot")))
+            if lot is None or lot.expires_on is None:
+                continue
+            rescued_allocations.append(
+                {
+                    "ingredient_name": ingredient.name,
+                    "unit": ingredient.unit,
+                    "quantity": allocation.get("quantity"),
+                    "expires_on": lot.expires_on,
+                }
+            )
     context = {
         "household": current_household(request.user),
         "suggestion": suggestion,
         "ingredients": ingredients,
         "rescued_ingredients": rescued_ingredients,
         "lots": lots,
+        "rescued_allocations": rescued_allocations,
     }
     return render(request, "inventory/meals/detail.html", context)
 

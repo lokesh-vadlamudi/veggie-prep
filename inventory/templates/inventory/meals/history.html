@@ -8,6 +8,7 @@
 
 {% if suggestions %}
 <section class="card history-panel" aria-label="Past meal suggestions">
+  <div class="table-wrap meal-table-wrap" role="region" aria-label="Meal suggestion history" tabindex="0">
   <table class="history-table">
     <thead>
       <tr>
@@ -30,6 +31,7 @@
       {% endfor %}
     </tbody>
   </table>
+  </div>
 </section>
 {% else %}
 <section class="empty-panel" aria-label="No suggestions yet">

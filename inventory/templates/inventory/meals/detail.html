@@ -21,6 +21,7 @@
 
   <section aria-labelledby="ingredients-heading">
     <h2 id="ingredients-heading">Ingredients</h2>
+    <div class="table-wrap meal-table-wrap" role="region" aria-label="Meal ingredient quantities" tabindex="0">
     <table class="ingredients-table">
       <thead>
         <tr>
@@ -50,21 +51,15 @@
         {% endfor %}
       </tbody>
     </table>
+    </div>
   </section>
 
-  {% if rescued_ingredients %}
+  {% if rescued_allocations %}
   <section class="rescue-panel" aria-labelledby="rescue-heading">
     <h2 id="rescue-heading">Expiry rescues</h2>
     <ul>
-      {% for ingredient in rescued_ingredients %}
-      <li>
-        <strong>{{ ingredient.name }}</strong> —
-        {% for allocation in ingredient.allocations %}
-          {% if allocation.rescued %}
-          {{ allocation.quantity }} {{ ingredient.unit }} from the lot expiring {{ lots.allocation.lot.expires_on|date:"Y-m-d" }}{% if not forloop.last %}; {% endif %}
-          {% endif %}
-        {% endfor %}
-      </li>
+      {% for allocation in rescued_allocations %}
+      <li><strong>{{ allocation.ingredient_name }}</strong> — {{ allocation.quantity }} {{ allocation.unit }} from the lot expiring {{ allocation.expires_on|date:"Y-m-d" }}</li>
       {% endfor %}
     </ul>
   </section>

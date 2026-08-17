@@ -9,6 +9,7 @@
   --muted: #5c6660;
   --accent: #2e7d32;
   --accent-ink: #ffffff;
+  --accent-label-ink: #14501f;
   --danger: #b3261e;
   --danger-bg: #fbe9e7;
   --danger-line: #f0c0ba;
@@ -355,7 +356,7 @@ input[type="number"] { min-width: 0; }
   font-size: 0.8rem;
   border: 1px solid var(--line);
 }
-.status-suggested { border-color: var(--accent, #2f6f4f); color: var(--accent-ink, #123827); }
+.status-suggested { border-color: var(--accent, #2f6f4f); color: var(--accent-label-ink, #14501f); }
 .status-cooked { border-color: var(--ok-ink, #2f6f4f); color: var(--ok-ink, #2f6f4f); }
 .status-rejected { border-color: var(--line); color: var(--muted); }
 
@@ -390,7 +391,7 @@ input[type="number"] { min-width: 0; }
   border-radius: 999px;
   font-size: 0.78rem;
   border: 1px solid var(--accent, #2f6f4f);
-  color: var(--accent-ink, #123827);
+  color: var(--accent-label-ink, #14501f);
 }
 
 .rescue-panel {
@@ -415,7 +416,9 @@ input[type="number"] { min-width: 0; }
 
 .help-text { margin: 0.25rem 0 0; font-size: 0.85rem; color: var(--muted); }
 .field-checkbox { display: flex; flex-direction: column; gap: 0.15rem; }
-.field-checkbox input { margin: 0; }
+.checkbox-label { display: inline-flex; align-items: center; gap: 0.5rem; width: fit-content; }
+.field-checkbox input[type="checkbox"] { width: auto; margin: 0; flex: 0 0 auto; }
+.checkbox-label span { font-weight: 600; }
 
 /* --- Narrow screens --------------------------------------------------------------- */
 
@@ -425,5 +428,5 @@ input[type="number"] { min-width: 0; }
   .detail-grid { grid-template-columns: 1fr; }
   .detail-grid dt { margin-top: 0.4rem; }
   .meal-meta { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .ingredients-table, .history-table { font-size: 0.9rem; }
+  .ingredients-table, .history-table { font-size: 0.9rem; min-width: 38rem; }
 }

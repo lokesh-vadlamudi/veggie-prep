@@ -1044,6 +1044,8 @@ class ViewFlowTests(TestCase):
         self.assertIn("Uses the onions that expire soon.", content)
         self.assertIn("fake-model", content)
         self.assertIn("rescues expiring stock", content)  # onion expires today
+        self.assertIn(timezone.localdate().isoformat(), content)
+        self.assertIn("Meal ingredient quantities", content)
         self.assertIn("Why this meal", content)
         self.assertIn("Suggested", content)
 
@@ -1079,6 +1081,8 @@ class ViewFlowTests(TestCase):
         self.assertIn("upstream is down", content)
         # Form still present and usable; no rows created.
         self.assertIn("id_servings", content)
+        self.assertIn("checkbox-label", content)
+        self.assertIn("id_include_expired", content)
         self.assertEqual(MealSuggestion.objects.count(), 0)
 
     def test_fractional_quantity_provider_path_completes_prg(self):
@@ -1133,6 +1137,7 @@ class ViewFlowTests(TestCase):
         self.assertIn("Garlicky onion stir-fry", content)
         self.assertIn("Second meal", content)
         self.assertIn(reverse(DETAIL, args=[suggestion_a1.pk]), content)
+        self.assertIn("Meal suggestion history", content)
 
     def test_history_empty_state(self):
         self._login("flow_b")

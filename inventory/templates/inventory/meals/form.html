@@ -38,8 +38,10 @@
         {{ form.preference }}
       </div>
       <div class="field field-wide field-checkbox">
-        <label for="id_include_expired">{{ form.include_expired.label }}</label>
-        {{ form.include_expired }}
+        <label class="checkbox-label" for="id_include_expired">
+          {{ form.include_expired }}
+          <span>{{ form.include_expired.label }}</span>
+        </label>
         <p class="help-text">{{ form.include_expired.help_text }}</p>
       </div>
     </div>
