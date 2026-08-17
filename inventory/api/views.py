@@ -43,7 +43,7 @@ def _household(request):
 
 
 def _api_exception_handler(exc, context):
-    """Stable JSON envelope for DRF authentication/validation failures.
+    """Stable JSON envelope for DRF exceptions on API paths.
 
     SessionAuthentication normally returns a bare 403 for anonymous or
     CSRF failures; this handler shapes those into the same envelope as
@@ -51,8 +51,10 @@ def _api_exception_handler(exc, context):
     SessionAuthentication enforces them before any view logic runs, so
     no writes occur on these paths.
 
-    Only applies to the ``/api/v1/`` namespace; HTML pages keep their
-    usual error behaviour (the handler returns None there).
+    Known DRF client exceptions are mapped to stable envelopes with their
+    correct status codes; only truly unexpected exceptions become a
+    generic 500. Only applies to the ``/api/v1/`` namespace; HTML pages
+    keep their usual error behaviour (the handler returns None there).
     """
     view = context.get("view")
     if view is not None:
@@ -67,6 +69,18 @@ def _api_exception_handler(exc, context):
         return csrf_failed_response()
     if isinstance(exc, drf_exceptions.AuthenticationFailed):
         return csrf_failed_response()
+    if isinstance(exc, drf_exceptions.MethodNotAllowed):
+        response = error_response(
+            "method_not_allowed",
+            "Method not allowed.",
+            http_status=status.HTTP_405_METHOD_NOT_ALLOWED,
+        )
+        allow = getattr(exc, "allow", None)
+        if allow:
+            response.headers["Allow"] = allow
+        return response
+    if isinstance(exc, drf_exceptions.NotFound):
+        return not_found_response()
     if isinstance(exc, drf_exceptions.ValidationError):
         fields = {}
         detail = exc.detail
@@ -78,6 +92,42 @@ def _api_exception_handler(exc, context):
             else:
                 fields[key] = [str(messages)]
         return error_response("validation_error", "Request validation failed.", fields)
+    if isinstance(exc, drf_exceptions.ParseError):
+        return error_response(
+            "parse_error",
+            "Request body could not be parsed.",
+            {"body": [str(exc.detail)]},
+            http_status=exc.status_code,
+        )
+    if isinstance(exc, drf_exceptions.UnsupportedMediaType):
+        return error_response(
+            "unsupported_media_type",
+            "Unsupported media type in request.",
+            http_status=exc.status_code,
+        )
+    if isinstance(exc, drf_exceptions.NotAcceptable):
+        return error_response(
+            "not_acceptable",
+            "Could not satisfy the request Accept header.",
+            http_status=exc.status_code,
+        )
+    if isinstance(exc, drf_exceptions.PermissionDenied):
+        return error_response(
+            "permission_denied",
+            "Permission denied.",
+            http_status=status.HTTP_403_FORBIDDEN,
+        )
+    if isinstance(exc, drf_exceptions.APIException):
+        # Known DRF client exception type with a stable status: use its
+        # own safe detail message; never leak internals.
+        detail = exc.detail
+        if not isinstance(detail, str):
+            detail = "Request could not be processed."
+        return error_response(
+            "api_error",
+            detail,
+            http_status=exc.status_code,
+        )
     # Unexpected exception on an API path: generic 500 with no detail leak.
     return error_response(
         "internal_error",

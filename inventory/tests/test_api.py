@@ -648,3 +648,79 @@ class UnexpectedExceptionTests(TestCase):
         self.assertEqual(body["error"]["code"], "internal_error")
         self.assertNotIn("secret internal detail", response.content.decode())
         self.assertNotIn("RuntimeError", response.content.decode())
+
+
+class DrfNativeExceptionTests(TestCase):
+    """Real-request regressions for DRF-native exceptions: unsupported
+    methods (405), out-of-range pagination (404), and parse/media errors.
+    These must return stable envelopes, never 500 internal_error."""
+
+    def setUp(self):
+        self.client = Client()
+        self.user = make_user("alice")
+        login(self.client, self.user)
+        self.lot = make_lot(self.user, "Apples", "5")
+
+    def test_patch_on_lot_list_returns_405(self):
+        response = self.client.patch(reverse(LOTS), {"quantity": "1"})
+        self.assertEqual(response.status_code, 405)
+        body = error_body(response)
+        self.assertEqual(body["code"], "method_not_allowed")
+        self.assertIsInstance(body["fields"], dict)
+        self.assertEqual(self.lot.events.count(), 1)
+
+    def test_delete_on_lot_detail_returns_405(self):
+        response = self.client.delete(reverse(LOT, args=[self.lot.pk]))
+        self.assertEqual(response.status_code, 405)
+        self.assertEqual(error_body(response)["code"], "method_not_allowed")
+        self.assertTrue(StockLot.objects.filter(pk=self.lot.pk).exists())
+
+    def test_get_on_consume_action_returns_405(self):
+        response = self.client.get(reverse(LOT_CONSUME, args=[self.lot.pk]))
+        self.assertEqual(response.status_code, 405)
+        self.assertEqual(error_body(response)["code"], "method_not_allowed")
+        self.assertEqual(self.lot.events.count(), 1)
+
+    def test_405_includes_allow_header(self):
+        response = self.client.patch(reverse(LOTS), {"quantity": "1"})
+        self.assertIn("Allow", response.headers)
+        self.assertIn("GET", response.headers["Allow"])
+
+    def test_invalid_pagination_page_returns_404(self):
+        response = self.client.get(f"{reverse(LOTS)}?page=99999")
+        self.assertEqual(response.status_code, 404)
+        self.assertEqual(error_body(response)["code"], "not_found")
+
+    def test_invalid_pagination_page_on_events_returns_404(self):
+        response = self.client.get(
+            f"{reverse(LOT_EVENTS, args=[self.lot.pk])}?page=99999"
+        )
+        self.assertEqual(response.status_code, 404)
+        self.assertEqual(error_body(response)["code"], "not_found")
+
+    def test_malformed_json_body_returns_400_parse_error(self):
+        dashboard = self.client.get(reverse("inventory:dashboard"))
+        token = self.client.cookies["csrftoken"].value
+        response = self.client.post(
+            reverse(LOTS),
+            b'{bad json',
+            content_type="application/json",
+            HTTP_X_CSRFTOKEN=token,
+        )
+        self.assertEqual(response.status_code, 400)
+        body = error_body(response)
+        self.assertEqual(body["code"], "parse_error")
+        self.assertEqual(self.lot.events.count(), 1)
+
+    def test_unsupported_media_type_returns_415(self):
+        dashboard = self.client.get(reverse("inventory:dashboard"))
+        token = self.client.cookies["csrftoken"].value
+        response = self.client.post(
+            reverse(LOTS),
+            b"<xml>not supported</xml>",
+            content_type="application/xml",
+            HTTP_X_CSRFTOKEN=token,
+        )
+        self.assertEqual(response.status_code, 415)
+        self.assertEqual(error_body(response)["code"], "unsupported_media_type")
+        self.assertEqual(self.lot.events.count(), 1)
