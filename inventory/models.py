@@ -7,6 +7,7 @@ updated or deleted through the model API.
 
 import uuid
 
+from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.db import models
 
@@ -21,9 +22,23 @@ class UUIDModel(models.Model):
 
 
 class Household(UUIDModel):
-    """A household owns all inventory records."""
+    """A household owns all inventory records.
+
+    ``user`` ties the household to the Django user who created it. It is
+    nullable so that households predating user linkage remain valid, and the
+    ``post_save`` signal on the user model guarantees that every user ends up
+    with exactly one household. ``on_delete=PROTECT`` ensures that deleting a
+    user can never destroy an existing ledger.
+    """
 
     name = models.CharField(max_length=200, unique=True)
+    user = models.OneToOneField(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="household",
+    )
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
@@ -66,7 +81,17 @@ class Product(UUIDModel):
 
 
 class StockLot(UUIDModel):
-    """A purchasable/consumable lot of a product within one household."""
+    """A purchasable/consumable lot of a product within one household.
+
+    ``quantity`` records the lot's purchase size. The currently available
+    quantity is always derived from the lot's signed, immutable ledger events
+    (see ``inventory.services.lot_balance``) and is never stored on the lot.
+    """
+
+    class Location(models.TextChoices):
+        PANTRY = "pantry", "pantry"
+        FRIDGE = "fridge", "fridge"
+        FREEZER = "freezer", "freezer"
 
     household = models.ForeignKey(
         Household, on_delete=models.CASCADE, related_name="lots"
@@ -77,6 +102,9 @@ class StockLot(UUIDModel):
     quantity = models.DecimalField(max_digits=12, decimal_places=3)
     unit = models.CharField(
         max_length=10, choices=Product.Unit.choices, default=Product.Unit.COUNT
+    )
+    location = models.CharField(
+        max_length=10, choices=Location.choices, default=Location.PANTRY
     )
     purchased_at = models.DateField(null=True, blank=True)
     expires_on = models.DateField(null=True, blank=True)

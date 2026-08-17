@@ -9,6 +9,7 @@ import uuid
 from datetime import date
 from decimal import Decimal
 
+from django.contrib.auth.models import User
 from django.core.exceptions import ValidationError
 from django.db import IntegrityError, transaction
 from django.test import TestCase
@@ -149,6 +150,67 @@ class StockLotTests(TestCase):
     def test_matching_households_pass_clean(self):
         lot = self._lot()
         lot.full_clean(exclude=["id"])  # no ValidationError
+
+
+class StockLotLocationTests(TestCase):
+    def _household_and_product(self):
+        household = make_household()
+        product = Product.objects.create(
+            household=household, name="Milk", unit="l"
+        )
+        return household, product
+
+    def test_location_defaults_to_pantry(self):
+        household, product = self._household_and_product()
+        lot = StockLot.objects.create(
+            household=household,
+            product=product,
+            quantity=Decimal("1"),
+            unit="l",
+        )
+        self.assertEqual(lot.location, "pantry")
+
+    def test_explicit_locations_can_be_stored(self):
+        household, product = self._household_and_product()
+        for location in ("fridge", "freezer"):
+            lot = StockLot.objects.create(
+                household=household,
+                product=product,
+                quantity=Decimal("1"),
+                unit="l",
+                location=location,
+            )
+            self.assertEqual(lot.location, location)
+
+    def test_invalid_location_rejected_by_validation(self):
+        household, product = self._household_and_product()
+        lot = StockLot(
+            household=household,
+            product=product,
+            quantity=Decimal("1"),
+            unit="l",
+            location="basement",
+        )
+        with self.assertRaises(ValidationError):
+            lot.full_clean()
+
+
+class HouseholdUserTests(TestCase):
+    def test_household_without_user_remains_valid(self):
+        """Migration safety: households that predate user linkage persist."""
+        household = make_household("Legacy")
+        self.assertIsNone(household.user)
+
+    def test_only_one_household_per_user(self):
+        user = User.objects.create_user(username="solo", password="x")
+        household = Household.objects.get(user=user)
+        with self.assertRaises(IntegrityError):
+            with transaction.atomic():
+                Household.objects.create(name="Second", user=household.user)
+
+    def test_user_reverse_accessor(self):
+        user = User.objects.create_user(username="rev", password="x")
+        self.assertEqual(user.household.name, "rev's household")
 
 
 class InventoryEventTests(TestCase):

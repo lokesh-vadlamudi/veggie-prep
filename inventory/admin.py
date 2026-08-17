@@ -17,8 +17,9 @@ class StockLotInline(admin.TabularInline):
 
 @admin.register(Household)
 class HouseholdAdmin(admin.ModelAdmin):
-    list_display = ("id", "name", "created_at")
-    search_fields = ("name",)
+    list_display = ("id", "name", "user", "created_at")
+    list_filter = ("user",)
+    search_fields = ("name", "user__username")
     inlines = (ProductInline, StockLotInline)
 
 
@@ -38,10 +39,11 @@ class StockLotAdmin(admin.ModelAdmin):
         "household",
         "quantity",
         "unit",
+        "location",
         "purchased_at",
         "expires_on",
     )
-    list_filter = ("unit", "household", "product")
+    list_filter = ("unit", "location", "household", "product")
     readonly_fields = ("id", "created_at")
 
 
