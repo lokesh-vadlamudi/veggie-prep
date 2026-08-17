@@ -39,20 +39,31 @@ Conventions
 """
 
 import re
+import uuid
 from datetime import date
 from decimal import Decimal, InvalidOperation
 
 from django.db import transaction
 
 from .exceptions import (
+    AllocationMismatch,
+    DuplicateMealEvent,
     HouseholdMismatch,
     InsufficientStock,
     InvalidAdjustment,
     InvalidQuantity,
     InvalidUnit,
+    SuggestionNotCookable,
     UnitMismatch,
 )
-from .models import Household, InventoryEvent, Product, StockLot
+from .models import (
+    Household,
+    InventoryEvent,
+    MealEvent,
+    MealSuggestion,
+    Product,
+    StockLot,
+)
 
 #: Quantities are stored with exactly this precision.
 THREE_PLACES = Decimal("0.001")
@@ -378,3 +389,203 @@ def set_lot_balance(*, household, lot, observed_balance, note=""):
         unit=locked.unit,
         note=note,
     )
+
+
+# --- cook confirmation --------------------------------------------------------
+
+#: Bounded meal-reference note attached to the CONSUME events a cook creates.
+#: Kept well under the event note limit so it can never be rejected.
+_COOK_NOTE_TEMPLATE = "Cooked meal {suggestion_id}: {meal_title}"
+_COOK_NOTE_MAX = 200
+
+
+def _cook_note(suggestion):
+    """Bounded ledger note referencing the cooked meal (never unbounded)."""
+    note = _COOK_NOTE_TEMPLATE.format(
+        suggestion_id=suggestion.pk, meal_title=suggestion.title
+    )
+    return note[:_COOK_NOTE_MAX]
+
+
+@transaction.atomic
+def confirm_cook(*, household, suggestion):
+    """Atomically confirm that ``suggestion`` was cooked.
+
+    Revalidates the suggestion's immutable ingredient/allocation snapshot
+    against live ledger balances, then — in one transaction — appends one
+    CONSUME event per drawn lot (deterministic order), creates the
+    household-scoped :class:`MealEvent`, and marks the suggestion
+    ``COOKED``. Any failure rolls back everything: no events, no cook
+    record, no status change.
+
+    Exactly-once: the suggestion row is locked first and its status
+    transitioned; a serialized duplicate call sees the completed state and
+    raises :class:`DuplicateMealEvent` without a second deduction. The
+    database-unique ``MealEvent`` is the final backstop.
+
+    Raises recoverable :class:`inventory.exceptions.InventoryServiceError`
+    subclasses (``HouseholdMismatch``, ``SuggestionNotCookable``,
+    ``DuplicateMealEvent``, ``AllocationMismatch``, ``InvalidQuantity``,
+    ``InvalidUnit``, ``UnitMismatch``, ``InsufficientStock``) with zero
+    writes on any failure.
+    """
+    # 1. Lock the household-owned suggestion row (foreign/unknown safe).
+    #    Accept either a model instance or a bare pk (e.g. from a view).
+    try:
+        suggestion_pk = suggestion.pk
+    except AttributeError:
+        suggestion_pk = suggestion
+    locked_suggestion = (
+        MealSuggestion.objects.select_for_update()
+        .filter(pk=suggestion_pk, household_id=household.pk)
+        .first()
+    )
+    if locked_suggestion is None:
+        raise HouseholdMismatch("Suggestion does not belong to this household.")
+
+    # 2. Reject non-cookable / duplicate states before any write.
+    if locked_suggestion.status == MealSuggestion.Status.COOKED:
+        raise DuplicateMealEvent("This meal has already been cooked.")
+    if locked_suggestion.status == MealSuggestion.Status.REJECTED:
+        raise SuggestionNotCookable("A rejected meal cannot be cooked.")
+    if locked_suggestion.status != MealSuggestion.Status.SUGGESTED:
+        raise SuggestionNotCookable(
+            f"Suggestion is not cookable in status "
+            f"{locked_suggestion.status!r}."
+        )
+
+    # 3. Load immutable ingredient snapshots; reject missing stock.
+    ingredients = list(
+        locked_suggestion.ingredients.order_by("name", "id")
+    )
+    for ingredient in ingredients:
+        if ingredient.missing_quantity > 0:
+            raise SuggestionNotCookable(
+                f"Meal is missing {ingredient.missing_quantity} "
+                f"{ingredient.unit} of {ingredient.name}."
+            )
+
+    # 4. Defensively validate every allocation (fail closed on tampering).
+    takes = {}  # lot pk -> (aggregate take, unit, ingredient count)
+    for ingredient in ingredients:
+        required = _require_positive(
+            _as_exact_quantity(
+                ingredient.required_quantity, "required quantity"
+            ),
+            "required quantity",
+        )
+        _require_known_unit(ingredient.unit)
+        owned = _as_exact_quantity(
+            ingredient.owned_quantity, "owned quantity"
+        )
+        allocated_total = Decimal("0")
+        allocations = ingredient.allocations
+        if not isinstance(allocations, list):
+            raise AllocationMismatch(
+                f"Ingredient {ingredient.name!r} has a malformed "
+                "allocation snapshot."
+            )
+        for entry in allocations:
+            if not isinstance(entry, dict):
+                raise AllocationMismatch(
+                    f"Ingredient {ingredient.name!r} has a malformed "
+                    "allocation entry."
+                )
+            try:
+                lot_uuid = uuid.UUID(str(entry.get("lot", "")))
+            except (TypeError, ValueError):
+                raise AllocationMismatch(
+                    f"Ingredient {ingredient.name!r} references an unknown "
+                    "lot."
+                ) from None
+            try:
+                take = _require_positive(
+                    _as_exact_quantity(
+                        entry.get("quantity", ""), "allocation quantity"
+                    ),
+                    "allocation quantity",
+                )
+            except InvalidQuantity:
+                raise
+            allocated_total += take
+            if lot_uuid in takes:
+                prior_take, prior_unit = takes[lot_uuid]
+                if prior_unit != ingredient.unit:
+                    raise UnitMismatch(
+                        "The same lot is allocated under two different "
+                        "units."
+                    )
+                takes[lot_uuid] = (prior_take + take, prior_unit)
+            else:
+                takes[lot_uuid] = (take, ingredient.unit)
+        if allocated_total != owned or allocated_total != required:
+            raise AllocationMismatch(
+                f"Ingredient {ingredient.name!r} allocations "
+                f"({allocated_total}) do not match its snapshot "
+                f"(owned {owned}, required {required})."
+            )
+    # Cross-ingredient unit check for lots drawn by several ingredients.
+    for (take, unit) in takes.values():
+        _require_known_unit(unit)
+
+    if not takes:
+        # No allocations at all is only valid when nothing is required;
+        # every ingredient above required > 0, so this means no ingredients
+        # existed — a suggestion must never cook with an empty ingredient
+        # snapshot.
+        raise AllocationMismatch(
+            "Suggestion has no ingredient allocations to consume."
+        )
+
+    # 5. Deterministic lock order: distinct lot UUIDs, sorted by UUID string.
+    lot_uuids = sorted(takes, key=lambda u: str(u))
+
+    # 6. Lock all lots in order; reject missing/foreign/unit-mismatch lots.
+    locked_lots = {}
+    for lot_uuid in lot_uuids:
+        locked = (
+            StockLot.objects.select_for_update()
+            .filter(pk=lot_uuid, household_id=household.pk)
+            .first()
+        )
+        if locked is None:
+            raise HouseholdMismatch(
+                f"Lot {lot_uuid} does not belong to this household."
+            )
+        take, unit = takes[lot_uuid]
+        _require_unit_compatible(unit, locked)
+        locked_lots[lot_uuid] = (locked, take, unit)
+
+    # Balance check: aggregate take must fit the live ledger balance.
+    for lot_uuid in lot_uuids:
+        locked, take, unit = locked_lots[lot_uuid]
+        balance = lot_balance(locked)
+        if take > balance:
+            raise InsufficientStock(
+                f"Cannot cook; lot {lot_uuid} has {balance} {locked.unit} "
+                f"but the meal needs {take} {unit}."
+            )
+
+    # 7. Append exactly one validated CONSUME event per lot, sorted order.
+    note = _cook_note(locked_suggestion)
+    for lot_uuid in lot_uuids:
+        locked, take, unit = locked_lots[lot_uuid]
+        _make_event(
+            household=household,
+            lot=locked,
+            event_type=InventoryEvent.EventType.CONSUME,
+            quantity=-take,
+            unit=unit,
+            note=note,
+        )
+
+    # 8. Cook record + status transition in the same transaction.
+    meal_event = MealEvent(
+        household=household,
+        suggestion=locked_suggestion,
+    )
+    meal_event.full_clean()
+    meal_event.save()
+    locked_suggestion.status = MealSuggestion.Status.COOKED
+    locked_suggestion.save(update_fields=["status"])
+    return meal_event

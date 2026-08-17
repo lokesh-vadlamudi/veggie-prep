@@ -23,14 +23,25 @@ from django.test.utils import CaptureQueriesContext
 
 from inventory import services
 from inventory.exceptions import (
+    AllocationMismatch,
+    DuplicateMealEvent,
     HouseholdMismatch,
     InsufficientStock,
     InvalidAdjustment,
     InvalidQuantity,
     InvalidUnit,
+    SuggestionNotCookable,
     UnitMismatch,
 )
-from inventory.models import Household, InventoryEvent, Product, StockLot
+from inventory.models import (
+    Household,
+    InventoryEvent,
+    MealEvent,
+    MealIngredient,
+    MealSuggestion,
+    Product,
+    StockLot,
+)
 
 
 def make_household_for_user():
@@ -985,3 +996,567 @@ class SetLotBalanceServiceTests(TestCase):
                 raise RuntimeError("simulated downstream failure")
         self.assertEqual(services.lot_balance(self.lot), Decimal("5.000"))
         self.assertEqual(self.lot.events.count(), 1)
+
+
+# --- confirm_cook -------------------------------------------------------------
+
+
+def make_suggestion(
+    household,
+    *,
+    title="Stir Fry",
+    status=MealSuggestion.Status.SUGGESTED,
+):
+    """Create a cookable suggestion with the given status."""
+    return MealSuggestion.objects.create(
+        household=household,
+        status=status,
+        title=title,
+        servings=2,
+        time_minutes=20,
+    )
+
+
+def make_ingredient(
+    suggestion,
+    household,
+    *,
+    name="Tomato",
+    unit="g",
+    required,
+    owned=None,
+    missing=Decimal("0"),
+    allocations=None,
+):
+    """Create one immutable ingredient snapshot (owned defaults to required)."""
+    owned = required if owned is None else owned
+    return MealIngredient.objects.create(
+        suggestion=suggestion,
+        household=household,
+        name=name,
+        unit=unit,
+        required_quantity=required,
+        owned_quantity=owned,
+        missing_quantity=missing,
+        allocations=allocations if allocations is not None else [],
+    )
+
+
+class ConfirmCookServiceTests(TestCase):
+    """confirm_cook: atomic allocation, deterministic lock/event order,
+    tamper-proof validation, exact-once semantics, and zero-write rollback
+    on every failure path."""
+
+    def setUp(self):
+        self.user, self.household = make_household_for_user()
+        self.product = make_product(self.household, name="Tomato", unit="g")
+        # Two lots for the same product so multi-lot aggregation can be
+        # exercised in deterministic UUID order.
+        self.lot_a = services.add_stock(
+            household=self.household,
+            product=self.product,
+            quantity=Decimal("3.000"),
+            unit="g",
+        )
+        self.lot_b = services.add_stock(
+            household=self.household,
+            product=self.product,
+            quantity=Decimal("2.000"),
+            unit="g",
+        )
+        self.other_user, self.other_household = make_household_for_user()
+        self.other_product = make_product(self.other_household, name="Tomato")
+        self.other_lot = services.add_stock(
+            household=self.other_household,
+            product=self.other_product,
+            quantity=Decimal("5.000"),
+            unit="g",
+        )
+
+    def _event_count(self):
+        """Household's InventoryEvent rows (setUp adds two ADD events)."""
+        return InventoryEvent.objects.filter(household=self.household).count()
+
+    # -- happy paths -----------------------------------------------------------
+
+    def test_partial_single_lot_happy_path(self):
+        suggestion = make_suggestion(self.household)
+        take = Decimal("1.500")
+        make_ingredient(
+            suggestion,
+            self.household,
+            required=take,
+            allocations=[{"lot": str(self.lot_a.pk), "quantity": str(take)}],
+        )
+        event = services.confirm_cook(
+            household=self.household, suggestion=suggestion
+        )
+        self.assertIsInstance(event, MealEvent)
+        self.assertEqual(event.household, self.household)
+        self.assertEqual(event.suggestion, suggestion)
+        suggestion.refresh_from_db()
+        self.assertEqual(suggestion.status, MealSuggestion.Status.COOKED)
+        consume = self.lot_a.events.get(event_type=InventoryEvent.EventType.CONSUME)
+        self.assertEqual(consume.quantity, -take)
+        self.assertEqual(consume.unit, "g")
+        self.assertEqual(services.lot_balance(self.lot_a), Decimal("1.500"))
+        self.assertEqual(services.lot_balance(self.lot_b), Decimal("2.000"))
+        self.assertTrue(consume.note)  # bounded meal-reference note
+        self.assertLessEqual(len(consume.note), 200)
+
+    def test_multiple_lot_aggregate_deduction_sorted_order(self):
+        """Two ingredients drawing from both lots must aggregate per lot,
+        lock lots in sorted UUID order, and emit events in that order."""
+        suggestion = make_suggestion(self.household)
+        lot_a, lot_b = self.lot_a.pk, self.lot_b.pk
+        make_ingredient(
+            suggestion,
+            self.household,
+            required=Decimal("2.000"),
+            allocations=[
+                {"lot": str(lot_a), "quantity": "1.000"},
+                {"lot": str(lot_b), "quantity": "1.000"},
+            ],
+        )
+        make_ingredient(
+            suggestion,
+            self.household,
+            name="Pepper",
+            required=Decimal("3.000"),
+            allocations=[
+                {"lot": str(lot_a), "quantity": "2.000"},
+                {"lot": str(lot_b), "quantity": "1.000"},
+            ],
+        )
+        # lot_a: 1.000 (tomato) + 2.000 (pepper) = 3.000 == balance.
+        # lot_b: 1.000 (tomato) + 1.000 (pepper) = 2.000 == balance.
+        services.confirm_cook(household=self.household, suggestion=suggestion)
+        # Per-lot aggregate deductions: lot_a 3.000, lot_b 2.000.
+        self.assertEqual(services.lot_balance(self.lot_a), Decimal("0.000"))
+        self.assertEqual(services.lot_balance(self.lot_b), Decimal("0.000"))
+        # Exactly one CONSUME event per lot, in deterministic UUID order.
+        events = list(
+            InventoryEvent.objects.filter(
+                household=self.household,
+                event_type=InventoryEvent.EventType.CONSUME,
+            ).order_by("id")
+        )
+        self.assertEqual(len(events), 2)
+        # The per-lot aggregate deductions must be exact regardless of
+        # physical row order in the test DB.
+        by_lot = {e.lot_id: e.quantity for e in events}
+        self.assertEqual(by_lot[lot_a], -Decimal("3.000"))
+        self.assertEqual(by_lot[lot_b], -Decimal("2.000"))
+        # Deterministic lock/event order (sorted by UUID string) is a
+        # backend-relevant guarantee: on backends that actually serialize
+        # locking reads, the events must be inserted in that order.
+        if connection.features.has_select_for_update:
+            expected_order = sorted([lot_a, lot_b], key=str)
+            self.assertEqual([e.lot_id for e in events], expected_order)
+
+    # -- rejection before any write --------------------------------------------
+
+    def test_foreign_suggestion_rejected(self):
+        suggestion = make_suggestion(self.other_household)
+        make_ingredient(
+            suggestion,
+            self.other_household,
+            required=Decimal("1.000"),
+            allocations=[{"lot": str(self.other_lot.pk), "quantity": "1.000"}],
+        )
+        before_events = self._event_count()
+        with self.assertRaises(HouseholdMismatch):
+            services.confirm_cook(
+                household=self.household, suggestion=suggestion
+            )
+        self.assertEqual(self._event_count(), before_events)
+        self.assertEqual(MealEvent.objects.count(), 0)
+
+    def test_unknown_suggestion_rejected(self):
+        # A suggestion that belongs to another household.
+        ghost = make_suggestion(self.other_household)
+        with self.assertRaises(HouseholdMismatch):
+            services.confirm_cook(
+                household=self.household, suggestion=ghost
+            )
+        # And a pk that exists for no household at all (bare UUID).
+        with self.assertRaises(HouseholdMismatch):
+            services.confirm_cook(
+                household=self.household,
+                suggestion=uuid.UUID(str(uuid.uuid4())),
+            )
+
+    def test_rejected_status_rejected(self):
+        suggestion = make_suggestion(
+            self.household, status=MealSuggestion.Status.REJECTED
+        )
+        make_ingredient(
+            suggestion,
+            self.household,
+            required=Decimal("1.000"),
+            allocations=[{"lot": str(self.lot_a.pk), "quantity": "1.000"}],
+        )
+        before_events = self._event_count()
+        with self.assertRaises(SuggestionNotCookable):
+            services.confirm_cook(
+                household=self.household, suggestion=suggestion
+            )
+        self.assertEqual(self._event_count(), before_events)
+        self.assertEqual(MealEvent.objects.count(), 0)
+
+    def test_missing_ingredient_rejected(self):
+        suggestion = make_suggestion(self.household)
+        make_ingredient(
+            suggestion,
+            self.household,
+            required=Decimal("5.000"),
+            owned=Decimal("3.000"),
+            missing=Decimal("2.000"),
+            allocations=[{"lot": str(self.lot_a.pk), "quantity": "3.000"}],
+        )
+        with self.assertRaises(SuggestionNotCookable):
+            services.confirm_cook(
+                household=self.household, suggestion=suggestion
+            )
+        self.assertEqual(self._event_count(), 2)
+
+    def test_empty_ingredient_snapshot_rejected(self):
+        suggestion = make_suggestion(self.household)
+        with self.assertRaises(AllocationMismatch):
+            services.confirm_cook(
+                household=self.household, suggestion=suggestion
+            )
+        self.assertEqual(self._event_count(), 2)
+
+    # -- tamper-proof allocation validation ------------------------------------
+
+    def _snapshot_with(self, *, name="Tomato", required=Decimal("1.000"),
+                       allocations=None):
+        suggestion = make_suggestion(self.household)
+        make_ingredient(
+            suggestion,
+            self.household,
+            name=name,
+            required=required,
+            allocations=allocations,
+        )
+        return suggestion
+
+    def test_malformed_allocation_not_a_list(self):
+        suggestion = self._snapshot_with(allocations="bogus")
+        with self.assertRaises(AllocationMismatch):
+            services.confirm_cook(
+                household=self.household, suggestion=suggestion
+            )
+        self.assertEqual(self._event_count(), 2)
+
+    def test_malformed_allocation_entry_not_a_dict(self):
+        suggestion = self._snapshot_with(allocations=["nope"])
+        with self.assertRaises(AllocationMismatch):
+            services.confirm_cook(
+                household=self.household, suggestion=suggestion
+            )
+        self.assertEqual(self._event_count(), 2)
+
+    def test_malformed_lot_uuid_rejected(self):
+        suggestion = self._snapshot_with(
+            allocations=[{"lot": "not-a-uuid", "quantity": "1.000"}]
+        )
+        with self.assertRaises(AllocationMismatch):
+            services.confirm_cook(
+                household=self.household, suggestion=suggestion
+            )
+        self.assertEqual(self._event_count(), 2)
+
+    def test_malformed_allocation_quantity_rejected(self):
+        for bad in ("abc", "NaN", "Infinity", "0.0001"):
+            suggestion = self._snapshot_with(
+                allocations=[{"lot": str(self.lot_a.pk), "quantity": bad}]
+            )
+            with self.assertRaises(InvalidQuantity):
+                services.confirm_cook(
+                    household=self.household, suggestion=suggestion
+                )
+            self.assertEqual(self._event_count(), 2)
+
+    def test_nonpositive_allocation_quantity_rejected(self):
+        suggestion = self._snapshot_with(
+            allocations=[{"lot": str(self.lot_a.pk), "quantity": "0"}]
+        )
+        with self.assertRaises(InvalidQuantity):
+            services.confirm_cook(
+                household=self.household, suggestion=suggestion
+            )
+
+    def test_allocation_total_mismatch_rejected(self):
+        # Owned/required say 2.000 but allocations sum to 1.500.
+        suggestion = self._snapshot_with(
+            required=Decimal("2.000"),
+            allocations=[{"lot": str(self.lot_a.pk), "quantity": "1.500"}],
+        )
+        with self.assertRaises(AllocationMismatch):
+            services.confirm_cook(
+                household=self.household, suggestion=suggestion
+            )
+        self.assertEqual(self._event_count(), 2)
+
+    def test_same_lot_two_units_rejected(self):
+        """A lot allocated under two different units is a tampered snapshot."""
+        suggestion = make_suggestion(self.household)
+        make_ingredient(
+            suggestion,
+            self.household,
+            name="Tomato",
+            unit="g",
+            required=Decimal("1.000"),
+            allocations=[{"lot": str(self.lot_a.pk), "quantity": "1.000"}],
+        )
+        make_ingredient(
+            suggestion,
+            self.household,
+            name="Tomato",
+            unit="ml",
+            required=Decimal("1.000"),
+            allocations=[{"lot": str(self.lot_a.pk), "quantity": "1.000"}],
+        )
+        with self.assertRaises(UnitMismatch):
+            services.confirm_cook(
+                household=self.household, suggestion=suggestion
+            )
+        self.assertEqual(self._event_count(), 2)
+
+    # -- lot-level failures under lock ------------------------------------------
+
+    def test_foreign_lot_rejected(self):
+        suggestion = self._snapshot_with(
+            allocations=[{"lot": str(self.other_lot.pk), "quantity": "1.000"}]
+        )
+        with self.assertRaises(HouseholdMismatch):
+            services.confirm_cook(
+                household=self.household, suggestion=suggestion
+            )
+        self.assertEqual(self._event_count(), 2)
+
+    def test_unit_mismatch_with_live_lot_rejected(self):
+        """Snapshot says 'ml' but the live lot's unit is 'g'."""
+        suggestion = make_suggestion(self.household)
+        make_ingredient(
+            suggestion,
+            self.household,
+            unit="ml",
+            required=Decimal("1.000"),
+            allocations=[{"lot": str(self.lot_a.pk), "quantity": "1.000"}],
+        )
+        with self.assertRaises(UnitMismatch):
+            services.confirm_cook(
+                household=self.household, suggestion=suggestion
+            )
+        self.assertEqual(self._event_count(), 2)
+
+    def test_insufficient_live_balance_rejected(self):
+        """Snapshot was valid at proposal time, but a concurrent consume
+        drained the lot — the live balance check must fail closed."""
+        suggestion = self._snapshot_with(
+            required=Decimal("3.000"),
+            allocations=[{"lot": str(self.lot_a.pk), "quantity": "3.000"}],
+        )
+        # Drain lot_a after the snapshot was taken.
+        services.consume_stock(
+            household=self.household,
+            lot=self.lot_a,
+            quantity=Decimal("2.000"),
+            unit="g",
+        )
+        self.assertEqual(services.lot_balance(self.lot_a), Decimal("1.000"))
+        with self.assertRaises(InsufficientStock):
+            services.confirm_cook(
+                household=self.household, suggestion=suggestion
+            )
+        # No cook deduction happened: only the two setup ADD events plus the
+        # one deliberate drain CONSUME exist for this household.
+        self.assertEqual(self._event_count(), 3)
+        self.assertEqual(services.lot_balance(self.lot_a), Decimal("1.000"))
+
+    # -- exactly-once semantics --------------------------------------------------
+
+    def test_sequential_duplicate_rejected_no_second_deduction(self):
+        suggestion = self._snapshot_with(
+            required=Decimal("1.000"),
+            allocations=[{"lot": str(self.lot_a.pk), "quantity": "1.000"}],
+        )
+        first = services.confirm_cook(
+            household=self.household, suggestion=suggestion
+        )
+        self.assertIsInstance(first, MealEvent)
+        balance_after_first = services.lot_balance(self.lot_a)
+        with self.assertRaises(DuplicateMealEvent):
+            services.confirm_cook(
+                household=self.household, suggestion=suggestion
+            )
+        self.assertEqual(
+            services.lot_balance(self.lot_a), balance_after_first
+        )
+        self.assertEqual(self._event_count(), 3)
+        self.assertEqual(MealEvent.objects.filter(suggestion=suggestion).count(), 1)
+
+    # -- rollback on mid-transaction failure -------------------------------------
+
+    def test_failure_after_first_event_rolls_back_all(self):
+        """Forcing a failure between the first CONSUME event and the
+        MealEvent must leave the ledger exactly as it was: zero events,
+        unchanged balances, no cook record, unchanged status."""
+        suggestion = self._snapshot_with(
+            required=Decimal("1.000"),
+            allocations=[{"lot": str(self.lot_a.pk), "quantity": "1.000"}],
+        )
+        real_make_event = services._make_event
+        state = {"calls": 0}
+
+        def failing_make_event(*args, **kwargs):
+            state["calls"] += 1
+            try:
+                return real_make_event(*args, **kwargs)
+            finally:
+                if state["calls"] == 1:
+                    # Fail right after the first (only) event is written but
+                    # before MealEvent creation.
+                    raise RuntimeError("simulated crash after first event")
+
+        with mock.patch.object(
+            services, "_make_event", side_effect=failing_make_event
+        ):
+            with self.assertRaises(RuntimeError):
+                services.confirm_cook(
+                    household=self.household, suggestion=suggestion
+                )
+        self.assertEqual(self._event_count(), 2)
+        self.assertEqual(services.lot_balance(self.lot_a), Decimal("3.000"))
+        self.assertEqual(MealEvent.objects.count(), 0)
+        suggestion.refresh_from_db()
+        self.assertEqual(suggestion.status, MealSuggestion.Status.SUGGESTED)
+
+    def test_intervention_at_lock_boundary_still_correct(self):
+        """A competing mutation that lands exactly as the lot lock is taken
+        must not corrupt the deduction: the balance is recomputed under
+        lock, so the final state is exact either way."""
+        suggestion = self._snapshot_with(
+            required=Decimal("1.000"),
+            allocations=[{"lot": str(self.lot_a.pk), "quantity": "1.000"}],
+        )
+        real_sfu = QuerySet.select_for_update
+        state = {"injected": False}
+        household, lot = self.household, self.lot_a
+
+        def fake_sfu(queryset, *args, **kwargs):
+            if not state["injected"] and queryset.model is StockLot:
+                state["injected"] = True
+                # Simulate a competing add that races the lock boundary.
+                services.add_stock(
+                    household=household,
+                    product=self.product,
+                    quantity=Decimal("1.000"),
+                    unit="g",
+                )
+            return real_sfu(queryset, *args, **kwargs)
+
+        with mock.patch.object(QuerySet, "select_for_update", fake_sfu):
+            services.confirm_cook(
+                household=self.household, suggestion=suggestion
+            )
+        # lot_a: 3.000 - 1.000 (cook deduction under lock) = 2.000.
+        # The racing add created a *new* lot (1.000), so lot_a's balance
+        # must reflect only the cook deduction — the lock boundary cannot
+        # double-count or miss the race.
+        self.assertEqual(services.lot_balance(lot), Decimal("2.000"))
+        self.assertEqual(
+            len(self.household.lots.filter(unit="g", product=self.product)),
+            3,  # lot_a, lot_b, and the race-added lot
+        )
+        self.assertEqual(
+            lot.events.filter(
+                event_type=InventoryEvent.EventType.CONSUME
+            ).count(),
+            1,
+        )
+
+    # -- determinism and validation plumbing --------------------------------------
+
+    def test_consume_events_carry_bounded_note(self):
+        suggestion = self._snapshot_with(
+            required=Decimal("1.000"),
+            allocations=[{"lot": str(self.lot_a.pk), "quantity": "1.000"}],
+        )
+        services.confirm_cook(
+            household=self.household, suggestion=suggestion
+        )
+        events = list(
+            InventoryEvent.objects.filter(household=self.household).filter(
+                event_type=InventoryEvent.EventType.CONSUME
+            )
+        )
+        for event in events:
+            self.assertEqual(len(event.note), len(event.note[:200]))
+            self.assertIn(str(suggestion.pk), event.note)
+
+    def test_row_locks_issued_on_supported_backends(self):
+        if not connection.features.has_select_for_update:
+            self.skipTest(
+                "select_for_update is not supported by the test database"
+            )
+        suggestion = self._snapshot_with(
+            required=Decimal("1.000"),
+            allocations=[{"lot": str(self.lot_a.pk), "quantity": "1.000"}],
+        )
+        with CaptureQueriesContext(connection) as ctx:
+            services.confirm_cook(
+                household=self.household, suggestion=suggestion
+            )
+        locking_queries = [
+            query["sql"]
+            for query in ctx.captured_queries
+            if "FOR UPDATE" in query["sql"].upper()
+        ]
+        # One suggestion lock + one lot lock.
+        self.assertEqual(len(locking_queries), 2)
+
+    def test_unknown_unit_in_snapshot_rejected(self):
+        """A snapshot row bypassing form validation (e.g. ORM-level
+        tampering) must still be rejected by the service before any write."""
+        suggestion = make_suggestion(self.household)
+        # Bypasses model-level validators by writing the row directly.
+        MealIngredient.objects.create(
+            suggestion=suggestion,
+            household=self.household,
+            name="Mystery",
+            unit="cubits",
+            required_quantity=Decimal("1.000"),
+            owned_quantity=Decimal("1.000"),
+            missing_quantity=Decimal("0"),
+            allocations=[{"lot": str(self.lot_a.pk), "quantity": "1.000"}],
+        )
+        # Refresh so the in-memory snapshot carries the tampered unit.
+        suggestion.refresh_from_db()
+        try:
+            services.confirm_cook(
+                household=self.household, suggestion=suggestion
+            )
+            self.fail("Expected InvalidUnit for unknown snapshot unit")
+        except InvalidUnit:
+            pass
+        self.assertEqual(self._event_count(), 2)
+
+    def test_later_failure_in_caller_transaction_rolls_back_cook(self):
+        suggestion = self._snapshot_with(
+            required=Decimal("1.000"),
+            allocations=[{"lot": str(self.lot_a.pk), "quantity": "1.000"}],
+        )
+        with self.assertRaises(RuntimeError):
+            with transaction.atomic():
+                services.confirm_cook(
+                    household=self.household, suggestion=suggestion
+                )
+                raise RuntimeError("simulated downstream failure")
+        self.assertEqual(self._event_count(), 2)
+        self.assertEqual(MealEvent.objects.count(), 0)
+        suggestion.refresh_from_db()
+        self.assertEqual(suggestion.status, MealSuggestion.Status.SUGGESTED)
