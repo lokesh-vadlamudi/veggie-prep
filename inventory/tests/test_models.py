@@ -28,11 +28,12 @@ class HouseholdCreationTests(TestCase):
         self.assertEqual(household.name, "House 1")
         self.assertIsNotNone(household.created_at)
 
-    def test_household_names_are_unique(self):
-        make_household("House 1")
-        with self.assertRaises(IntegrityError):
-            with transaction.atomic():
-                make_household("House 1")
+    def test_household_names_are_not_unique(self):
+        """Display names may repeat: legacy/ownerless households must be
+        able to share a name without blocking new household creation."""
+        first = make_household("House 1")
+        second = make_household("House 1")
+        self.assertNotEqual(first.id, second.id)
 
 
 class ProductCreationTests(TestCase):

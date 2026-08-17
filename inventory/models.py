@@ -29,9 +29,13 @@ class Household(UUIDModel):
     ``post_save`` signal on the user model guarantees that every user ends up
     with exactly one household. ``on_delete=PROTECT`` ensures that deleting a
     user can never destroy an existing ledger.
+
+    ``name`` is a display name only and is deliberately NOT unique: legacy or
+    ownerless households may share names, and that must never block the
+    automatic creation of a user's default household.
     """
 
-    name = models.CharField(max_length=200, unique=True)
+    name = models.CharField(max_length=200)
     user = models.OneToOneField(
         settings.AUTH_USER_MODEL,
         on_delete=models.PROTECT,

@@ -1,15 +1,21 @@
-"""Signals that keep household ownership consistent with Django users.
+"""Signal handler that keeps household ownership consistent with users.
 
 Every newly created user automatically receives exactly one default
-household. The handler is idempotent (``get_or_create``), so repeated saves,
-duplicate signal deliveries, or a manually pre-created household never
-produce a second household for the same user.
+household. The handler is idempotent (``get_or_create`` on the OneToOne
+``user`` field), so repeated saves, duplicate signal deliveries, or a
+manually pre-created household never produce a second household for the
+same user.
+
+The handler is model-agnostic: it works with whatever
+``settings.AUTH_USER_MODEL`` is configured. Connection happens in
+``inventory.apps.InventoryConfig.ready`` with a stable ``dispatch_uid`` so
+that repeated calls to ``ready()`` never double-connect.
 """
 
-from django.contrib.auth.models import User
-from django.db.models.signals import post_save
-
 from .models import Household
+
+#: Stable connection id; makes repeated connects idempotent.
+DISPATCH_UID = "inventory.ensure_user_household"
 
 
 def default_household_name(user):
@@ -25,6 +31,3 @@ def ensure_user_household(sender, instance=None, created=False, **kwargs):
         user=instance,
         defaults={"name": default_household_name(instance)},
     )
-
-
-post_save.connect(ensure_user_household, sender=User)
