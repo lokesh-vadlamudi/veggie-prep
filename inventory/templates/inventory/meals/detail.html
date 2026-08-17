@@ -1,0 +1,103 @@
+{% extends "base.html" %}
+
+{% block title %}{{ suggestion.title }} · Veggie Prep{% endblock %}
+
+{% block content %}
+<p class="back-link"><a href="{% url 'inventory:meal_suggest' %}">← New suggestion</a> · <a href="{% url 'inventory:meal_history' %}">Meal history</a></p>
+
+<article class="card meal-detail">
+  <header class="meal-header">
+    <h1>{{ suggestion.title }}</h1>
+    <p class="meal-status">Status: <span class="status status-{{ suggestion.status }}">{{ suggestion.get_status_display }}</span></p>
+    <dl class="meal-meta">
+      <div><dt>Servings</dt><dd>{{ suggestion.servings }}</dd></div>
+      <div><dt>Time</dt><dd>{{ suggestion.time_minutes }} min</dd></div>
+      <div><dt>Suggested</dt><dd>{{ suggestion.created_at|date:"Y-m-d H:i" }}</dd></div>
+      {% if suggestion.provider_model %}
+      <div><dt>Model</dt><dd>{{ suggestion.provider_model }}</dd></div>
+      {% endif %}
+    </dl>
+  </header>
+
+  <section aria-labelledby="ingredients-heading">
+    <h2 id="ingredients-heading">Ingredients</h2>
+    <table class="ingredients-table">
+      <thead>
+        <tr>
+          <th scope="col">Ingredient</th>
+          <th scope="col">Required</th>
+          <th scope="col">You have</th>
+          <th scope="col">Missing</th>
+          <th scope="col">Expiry</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for ingredient in ingredients %}
+        <tr>
+          <th scope="row">{{ ingredient.name }} <span class="unit">({{ ingredient.unit }})</span></th>
+          <td>{{ ingredient.required_quantity }} {{ ingredient.unit }}</td>
+          <td>{{ ingredient.owned_quantity }} {{ ingredient.unit }}</td>
+          <td>
+            {% if ingredient.missing_quantity > 0 %}
+            <strong>{{ ingredient.missing_quantity }} {{ ingredient.unit }}</strong>
+            {% else %}—{% endif %}
+          </td>
+          <td>
+            {% if ingredient.rescued %}<span class="rescued-badge" title="Uses a lot that is expiring">rescues expiring stock</span>
+            {% else %}<span class="expiry-none">—</span>{% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </section>
+
+  {% if rescued_ingredients %}
+  <section class="rescue-panel" aria-labelledby="rescue-heading">
+    <h2 id="rescue-heading">Expiry rescues</h2>
+    <ul>
+      {% for ingredient in rescued_ingredients %}
+      <li>
+        <strong>{{ ingredient.name }}</strong> —
+        {% for allocation in ingredient.allocations %}
+          {% if allocation.rescued %}
+          {{ allocation.quantity }} {{ ingredient.unit }} from the lot expiring {{ lots.allocation.lot.expires_on|date:"Y-m-d" }}{% if not forloop.last %}; {% endif %}
+          {% endif %}
+        {% endfor %}
+      </li>
+      {% endfor %}
+    </ul>
+  </section>
+  {% endif %}
+
+  <section aria-labelledby="steps-heading">
+    <h2 id="steps-heading">Steps</h2>
+    <ol class="steps">
+      {% for step in suggestion.steps %}<li>{{ step }}</li>{% endfor %}
+    </ol>
+  </section>
+
+  {% if suggestion.substitutions %}
+  <section aria-labelledby="subs-heading">
+    <h2 id="subs-heading">Substitutions</h2>
+    <ul>
+      {% for sub in suggestion.substitutions %}<li>{{ sub }}</li>{% endfor %}
+    </ul>
+  </section>
+  {% endif %}
+
+  {% if suggestion.safety_note %}
+  <section class="safety-panel" aria-labelledby="safety-heading">
+    <h2 id="safety-heading">Safety note</h2>
+    <p>{{ suggestion.safety_note }}</p>
+  </section>
+  {% endif %}
+
+  {% if suggestion.rationale %}
+  <section aria-labelledby="rationale-heading">
+    <h2 id="rationale-heading">Why this meal</h2>
+    <p class="rationale">{{ suggestion.rationale }}</p>
+  </section>
+  {% endif %}
+</article>
+{% endblock %}

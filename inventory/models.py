@@ -2,7 +2,9 @@
 
 All entities are scoped to a ``Household`` so that data is isolated between
 households. ``InventoryEvent`` is append-only: existing events cannot be
-updated or deleted through the model API.
+updated or deleted through the model API. ``MealIngredient`` rows are
+immutable reconciliation snapshots; ``MealSuggestion`` rows keep the
+provider proposal immutable while the lifecycle ``status`` may move.
 """
 
 import uuid
@@ -190,3 +192,132 @@ class InventoryEvent(UUIDModel):
         raise ValueError(
             "InventoryEvent is append-only; events cannot be deleted."
         )
+
+
+class MealSuggestion(UUIDModel):
+    """An AI-proposed meal, scoped to one household.
+
+    The stored provider proposal (title, servings, time, steps,
+    substitutions, safety note, rationale, provider model) is immutable
+    after the first save: it is a fixed record of what the provider
+    proposed. Only the lifecycle ``status`` is expected to change later
+    (cook confirmation flows build on it). No prompt/response text and no
+    credentials are stored.
+    """
+
+    class Status(models.TextChoices):
+        SUGGESTED = "suggested", "suggested"
+        COOKED = "cooked", "cooked"
+        REJECTED = "rejected", "rejected"
+
+    household = models.ForeignKey(
+        Household, on_delete=models.CASCADE, related_name="meal_suggestions"
+    )
+    status = models.CharField(
+        max_length=10, choices=Status.choices, default=Status.SUGGESTED
+    )
+    title = models.CharField(max_length=200)
+    servings = models.PositiveSmallIntegerField()
+    time_minutes = models.PositiveSmallIntegerField()
+    steps = models.JSONField(default=list)  # list[str], bounded by validator
+    substitutions = models.JSONField(default=list)  # list[str]
+    safety_note = models.CharField(max_length=500, blank=True, default="")
+    rationale = models.TextField(blank=True, default="")  # "why this meal"
+    provider_model = models.CharField(max_length=100, blank=True, default="")
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ("-created_at",)
+
+    #: Fields that record the provider's proposal; immutable after save.
+    _PROPOSAL_FIELDS = (
+        "title",
+        "servings",
+        "time_minutes",
+        "steps",
+        "substitutions",
+        "safety_note",
+        "rationale",
+        "provider_model",
+    )
+
+    @property
+    def provider_snapshot(self):
+        return (
+            self.title,
+            self.servings,
+            self.time_minutes,
+            tuple(self.steps or ()),
+            tuple(self.substitutions or ()),
+            self.safety_note,
+            self.rationale,
+            self.provider_model,
+        )
+
+    def save(self, *args, **kwargs):
+        if self._state.adding or kwargs.get("raw") or kwargs.get("force_insert"):
+            return super().save(*args, **kwargs)
+        stored = type(self).objects.filter(pk=self.pk).first()
+        if stored is not None and stored.provider_snapshot != self.provider_snapshot:
+            raise ValueError(
+                "The stored provider proposal is immutable; create a new "
+                "suggestion instead of editing it."
+            )
+        return super().save(*args, **kwargs)
+
+    def __str__(self):
+        return f"Suggestion {self.id}: {self.title}"
+
+
+class MealIngredient(UUIDModel):
+    """Immutable reconciliation snapshot of one proposed ingredient.
+
+    ``required_quantity`` is what the meal needs; ``owned_quantity`` is
+    what the household's matching lots (exact unit) cover;
+    ``missing_quantity`` is the remainder to buy. ``rescued`` marks that at
+    least one allocated lot was expiring (today/+1/+2, or explicitly
+    included expired stock). ``allocations`` records which lots were drawn
+    from, in deterministic order.
+    """
+
+    suggestion = models.ForeignKey(
+        MealSuggestion, on_delete=models.CASCADE, related_name="ingredients"
+    )
+    household = models.ForeignKey(
+        Household, on_delete=models.CASCADE, related_name="meal_ingredients"
+    )
+    name = models.CharField(max_length=100)
+    unit = models.CharField(max_length=10, choices=Product.Unit.choices)
+    required_quantity = models.DecimalField(max_digits=12, decimal_places=3)
+    owned_quantity = models.DecimalField(max_digits=12, decimal_places=3)
+    missing_quantity = models.DecimalField(max_digits=12, decimal_places=3)
+    rescued = models.BooleanField(default=False)
+    allocations = models.JSONField(default=list)  # [{lot, quantity, rescued}]
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ("suggestion", "name")
+        constraints = [
+            models.UniqueConstraint(
+                fields=["suggestion", "name", "unit"],
+                name="unique_ingredient_per_suggestion",
+            )
+        ]
+
+    def save(self, *args, **kwargs):
+        if not self._state.adding:
+            raise ValueError(
+                "MealIngredient is an immutable reconciliation snapshot; "
+                "it cannot be updated."
+            )
+        kwargs["force_insert"] = True
+        return super().save(*args, **kwargs)
+
+    def delete(self, *args, **kwargs):
+        raise ValueError(
+            "MealIngredient is an immutable reconciliation snapshot; "
+            "it cannot be deleted."
+        )
+
+    def __str__(self):
+        return f"{self.name} ({self.required_quantity} {self.unit})"

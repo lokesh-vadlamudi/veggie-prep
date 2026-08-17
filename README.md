@@ -54,17 +54,51 @@ settings explicitly:
 DJANGO_SETTINGS_MODULE=config.settings_test .venv/bin/python manage.py check
 ```
 
+## AI meal suggestions
+
+The "Suggest meals" page asks a configured provider (any OpenAI-compatible
+chat-completions endpoint, e.g. a local vLLM server) to plan one meal from
+your household's positive-balance stock, prioritizing lots that expire within
+two days. Suggestions are read-only: they never change inventory, and each
+one stores a bounded, structured record of the provider's proposal plus a
+deterministic reconciliation against your lots (owned vs. missing quantity,
+which expiring lots are rescued). No prompt/response text and no credentials
+are stored.
+
+Configuration is server-side only (see `.env.example`); nothing about the
+provider is stored in the database and no secret ever reaches the UI:
+
+| Variable       | Required | Meaning                                                       |
+| -------------- | :------: | ------------------------------------------------------------- |
+| `AI_BASE_URL`  | yes*     | Provider base URL; empty/missing disables the feature.        |
+| `AI_MODEL`     | yes*     | Model identifier to request.                                  |
+| `AI_API_KEY`   | no       | Sent as `Authorization: Bearer` when your endpoint needs one. |
+| `AI_TIMEOUT`   | no       | Socket timeout in seconds (default 30, capped at 120).        |
+
+\* required only when the feature is enabled.
+
+The provider must reply with a single JSON object (title, servings,
+time_minutes, steps, optional substitutions/safety_note, rationale, and an
+ingredients list using the app's units — `count, each, g, kg, ml, l`).
+Responses are size-capped, and malformed JSON, schema violations, unsupported
+units, or invalid quantities produce a recoverable error on the form with no
+partial suggestion and no inventory change.
+
 ## Tests
 
 ```bash
 .venv/bin/python manage.py test
 ```
 
-Runs the full project test suite (SQLite in-memory, no PostgreSQL needed).
+Runs the full project test suite (SQLite in-memory, no PostgreSQL needed; no
+network calls — the provider is always faked in tests).
 
 ## Status
 
-Foundation slice 1: project scaffold, DRF wiring, environment-based settings,
-test tooling. Models (Household, Product, StockLot, InventoryEvent), the
-inventory service layer, authentication flows, and the API surface are
-deferred to later slices.
+Implemented: models (Household, Product, StockLot, InventoryEvent,
+MealSuggestion, MealIngredient), the transactional inventory service layer,
+authenticated web workflow (dashboard, add/consume/discard/correct,
+auth/logout), and AI meal suggestion generation with deterministic
+reconciliation (form, result, history; household-scoped 404s; provider
+failure taxonomy). Deferred: cook-confirmation flow for suggestions,
+DRF/API exposure, and provider key/ops configuration.

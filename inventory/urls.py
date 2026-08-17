@@ -3,7 +3,7 @@
 from django.contrib.auth import views as auth_views
 from django.urls import path
 
-from . import views
+from . import meal_views, views
 
 app_name = "inventory"
 
@@ -14,6 +14,9 @@ urlpatterns = [
     path("lots/<uuid:pk>/consume/", views.ConsumeView.as_view(), name="consume"),
     path("lots/<uuid:pk>/discard/", views.DiscardView.as_view(), name="discard"),
     path("lots/<uuid:pk>/correct/", views.CorrectView.as_view(), name="correct"),
+    path("meals/", meal_views.SuggestionFormView.as_view(), name="meal_suggest"),
+    path("meals/history/", meal_views.SuggestionHistoryView.as_view(), name="meal_history"),
+    path("meals/<uuid:pk>/", meal_views.suggestion_detail, name="meal_detail"),
     path(
         "login/",
         auth_views.LoginView.as_view(

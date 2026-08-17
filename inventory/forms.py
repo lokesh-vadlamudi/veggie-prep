@@ -83,6 +83,49 @@ class LotMutationForm(forms.Form):
     note = forms.CharField(label="Note", required=False, max_length=200, strip=True)
 
 
+class MealSuggestionForm(forms.Form):
+    """Constraints for an AI meal suggestion; validated again in the
+    generation service bounds (see ``inventory.ai.schema``)."""
+
+    servings = forms.IntegerField(
+        label="Servings",
+        min_value=1,
+        max_value=50,
+        initial=2,
+        help_text="How many people the meal should serve.",
+    )
+    max_minutes = forms.IntegerField(
+        label="Max cooking time (minutes)",
+        min_value=5,
+        max_value=300,
+        initial=45,
+        help_text="The meal must fit inside this time.",
+    )
+    dietary_exclusions = forms.CharField(
+        label="Dietary exclusions",
+        required=False,
+        max_length=200,
+        strip=True,
+        help_text="Optional, comma-separated, e.g. 'nuts, dairy'.",
+    )
+    preference = forms.CharField(
+        label="Preference",
+        required=False,
+        max_length=200,
+        strip=True,
+        help_text="Optional, e.g. 'something light and warm'.",
+    )
+    include_expired = forms.BooleanField(
+        label="Include expired stock",
+        required=False,
+        initial=False,
+        help_text=(
+            "Off by default. Tick to let the AI plan around lots that are "
+            "already past their expiry date. Use with care."
+        ),
+    )
+
+
 class CorrectionForm(forms.Form):
     """Correct: submit the observed balance; the signed delta is computed."""
 

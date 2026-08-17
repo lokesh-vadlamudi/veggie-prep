@@ -1,0 +1,52 @@
+{% extends "base.html" %}
+
+{% block title %}Suggest a meal · Veggie Prep{% endblock %}
+
+{% block content %}
+<h1>Suggest a meal{% if household.name %} · {{ household.name }}{% endif %}</h1>
+<p class="page-intro">
+  The AI plans one meal from <strong>your household's</strong> positive-balance
+  stock, prioritizing what expires soon. It never changes your inventory —
+  it only tells you what you already have and what is missing.
+</p>
+
+{% if ai_error %}
+<div class="banner banner-error" role="alert" id="ai-error">
+  <strong>Could not generate a meal.</strong>
+  <p>{{ ai_error }}</p>
+</div>
+{% endif %}
+
+<section class="card">
+  <form method="post" action="{% url 'inventory:meal_suggest' %}">
+    {% csrf_token %}
+    <div class="field-grid">
+      <div class="field">
+        <label for="id_servings">Servings</label>
+        {{ form.servings }}
+      </div>
+      <div class="field">
+        <label for="id_max_minutes">Max cooking time (minutes)</label>
+        {{ form.max_minutes }}
+      </div>
+      <div class="field field-wide">
+        <label for="id_dietary_exclusions">Dietary exclusions <span class="optional">(optional)</span></label>
+        {{ form.dietary_exclusions }}
+      </div>
+      <div class="field field-wide">
+        <label for="id_preference">Preference <span class="optional">(optional)</span></label>
+        {{ form.preference }}
+      </div>
+      <div class="field field-wide field-checkbox">
+        <label for="id_include_expired">{{ form.include_expired.label }}</label>
+        {{ form.include_expired }}
+        <p class="help-text">{{ form.include_expired.help_text }}</p>
+      </div>
+    </div>
+    {% include "inventory/_form_errors.html" with form=form %}
+    <button type="submit" class="btn btn-primary">Suggest a meal</button>
+  </form>
+</section>
+
+<p class="page-intro"><a href="{% url 'inventory:meal_history' %}">See past suggestions</a></p>
+{% endblock %}
