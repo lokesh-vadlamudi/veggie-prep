@@ -1150,11 +1150,60 @@ class ConfirmCookServiceTests(TestCase):
         # Deterministic lock/event order (sorted by UUID string) is a
         # backend-relevant guarantee: on backends that actually serialize
         # locking reads, the events must be inserted in that order.
+        expected_order = sorted([lot_a, lot_b], key=str)
+        # Physical insertion order (SQLite rowid) is deterministic even when
+        # the pk is a random UUID, so prove the sorted-UUID CONSUME order on
+        # every backend — ungated from has_select_for_update.
+        # SQLite stores UUIDField values as 32-char hex (no dashes), so the
+        # raw WHERE clause binds the .hex form and the returned lot ids are
+        # normalized back through uuid.UUID.
+        table = InventoryEvent._meta.db_table
+        order_rows = connection.cursor().execute(
+            f"SELECT lot_id FROM {table} "
+            "WHERE household_id = ? AND event_type = 'CONSUME' "
+            "ORDER BY rowid",
+            [self.household.pk.hex],
+        ).fetchall()
+        self.assertEqual(
+            [uuid.UUID(row[0]) for row in order_rows],
+            [uuid.UUID(str(lot)) for lot in expected_order],
+        )
+        # Row-lock SQL is only issued on backends that support
+        # select_for_update; keep that assertion backend-gated.
         if connection.features.has_select_for_update:
-            expected_order = sorted([lot_a, lot_b], key=str)
             self.assertEqual([e.lot_id for e in events], expected_order)
 
     # -- rejection before any write --------------------------------------------
+
+    def test_tampered_ingredient_household_rejected_before_writes(self):
+        """Bishop hardening: a snapshot row whose household differs from the
+        locked suggestion/caller household is a tampered snapshot and must be
+        rejected before any write — even when its allocations reference the
+        caller's own lots."""
+        suggestion = self._snapshot_with(
+            allocations=[{"lot": str(self.lot_a.pk), "quantity": "1.000"}],
+        )
+        # Forge the snapshot row via raw SQL: MealIngredient.save() refuses
+        # ORM updates, which is exactly the tampering surface this check
+        # must defend.
+        table = MealIngredient._meta.db_table
+        with connection.cursor() as cursor:
+            cursor.execute(
+                f"UPDATE {table} SET household_id = ? "
+                "WHERE id = ?",
+                [self.other_household.pk.hex,
+                 suggestion.ingredients.get().pk.hex],
+            )
+        before_events = self._event_count()
+        with self.assertRaises(HouseholdMismatch):
+            services.confirm_cook(
+                household=self.household, suggestion=suggestion
+            )
+        self.assertEqual(self._event_count(), before_events)
+        self.assertEqual(MealEvent.objects.count(), 0)
+        suggestion.refresh_from_db()
+        self.assertEqual(suggestion.status, MealSuggestion.Status.SUGGESTED)
+        self.assertEqual(services.lot_balance(self.lot_a), Decimal("3.000"))
 
     def test_foreign_suggestion_rejected(self):
         suggestion = make_suggestion(self.other_household)

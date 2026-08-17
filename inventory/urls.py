@@ -18,6 +18,11 @@ urlpatterns = [
     path("meals/history/", meal_views.SuggestionHistoryView.as_view(), name="meal_history"),
     path("meals/<uuid:pk>/", meal_views.suggestion_detail, name="meal_detail"),
     path(
+        "meals/<uuid:pk>/cook/",
+        meal_views.CookSuggestionView.as_view(),
+        name="meal_cook",
+    ),
+    path(
         "login/",
         auth_views.LoginView.as_view(
             template_name="registration/login.html",

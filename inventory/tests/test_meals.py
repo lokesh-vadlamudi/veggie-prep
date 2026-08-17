@@ -18,6 +18,7 @@ import json
 import os
 import socket
 import urllib.error
+from pathlib import Path
 from unittest import mock
 
 from django.contrib.auth import get_user_model
@@ -25,7 +26,7 @@ from django.test import TestCase
 from django.urls import reverse
 from django.utils import timezone
 
-from inventory import meal_services, services
+from inventory import exceptions, meal_services, services
 from inventory.ai import openai as openai_module
 from inventory.ai.exceptions import (
     AIConfigError,
@@ -37,6 +38,7 @@ from inventory.ai.exceptions import (
 from inventory.ai.schema import validate_proposal
 from inventory.models import (
     InventoryEvent,
+    MealEvent,
     MealIngredient,
     MealSuggestion,
 )
@@ -978,6 +980,339 @@ class MealModelTests(TestCase):
             ingredient.save()
         with self.assertRaises(ValueError):
             ingredient.delete()
+
+
+class CookViewTests(TestCase):
+    """Authenticated POST-only CSRF cook action: PRG, exact ledger
+    deductions, duplicate safety, rollback errors, cross-household 404,
+    and the detail-page cook states."""
+
+    def setUp(self):
+        self.user_a = make_user("cook_a")
+        self.user_b = make_user("cook_b")
+        make_lot(self.user_a, "Onion", 5, "count")
+        make_lot(self.user_b, "Basil", 3, "count")
+
+    def _login(self, username):
+        assert self.client.login(
+            username=username, password="sup3r-s3cr3t-pass"
+        )
+
+    def _cookable_suggestion(self, user, *, title="Onion stir-fry"):
+        """A SUGGESTED suggestion whose ingredients are all fully owned,
+        so the detail page offers the Cook action and confirm_cook can
+        succeed end-to-end."""
+        fake = FakeProvider(payload=valid_payload(
+            title=title,
+            ingredients=[{"name": "Onion", "unit": "count", "quantity": 3}],
+        ))
+        with mock.patch.object(meal_services, "get_provider",
+                               return_value=fake):
+            return meal_services.generate_suggestion(
+                household=user.household,
+            )
+
+    @staticmethod
+    def _fully_owned_suggestion(suggestion):
+        """Flip every ingredient snapshot to owned == required so the meal
+        is cookable. MealIngredient.save() refuses ORM updates, so the
+        snapshot is rewritten via raw SQL (the same surface a tampering
+        attacker would use)."""
+        from django.db import connection
+
+        table = MealIngredient._meta.db_table
+        for ingredient in suggestion.ingredients.all():
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    f"UPDATE {table} SET owned_quantity = ?, "
+                    "missing_quantity = ? WHERE id = ?",
+                    [str(ingredient.required_quantity), "0",
+                     str(ingredient.pk)],
+                )
+        suggestion.refresh_from_db()
+        return suggestion
+
+    # -- auth + CSRF + method ---------------------------------------------------
+
+    def test_cook_requires_auth_with_next(self):
+        response = self.client.post(
+            reverse("inventory:meal_cook", args=[self._cookable_suggestion(self.user_a).pk])
+        )
+        self.assertEqual(response.status_code, 302)
+        self.assertIn(reverse(LOGIN), response["Location"])
+
+    def test_cook_get_requires_auth_with_next(self):
+        suggestion = self._cookable_suggestion(self.user_a)
+        response = self.client.get(
+            reverse("inventory:meal_cook", args=[suggestion.pk])
+        )
+        self.assertEqual(response.status_code, 302)
+        self.assertIn(reverse(LOGIN), response["Location"])
+
+    def test_cook_csrf_rejected_no_deduction(self):
+        from django.test import Client as TestClient
+
+        suggestion = self._fully_owned_suggestion(
+            self._cookable_suggestion(self.user_a)
+        )
+        strict = TestClient(enforce_csrf_checks=True)
+        assert strict.login(username="cook_a", password="sup3r-s3cr3t-pass")
+        response = strict.post(
+            reverse("inventory:meal_cook", args=[suggestion.pk])
+        )
+        self.assertEqual(response.status_code, 403)
+        suggestion.refresh_from_db()
+        self.assertEqual(suggestion.status, MealSuggestion.Status.SUGGESTED)
+        self.assertEqual(
+            InventoryEvent.objects.filter(
+                event_type=InventoryEvent.EventType.CONSUME
+            ).count(),
+            0,
+        )
+
+    def test_cook_is_post_only_get_falls_back_to_detail(self):
+        self._login("cook_a")
+        suggestion = self._fully_owned_suggestion(
+            self._cookable_suggestion(self.user_a)
+        )
+        response = self.client.get(
+            reverse("inventory:meal_cook", args=[suggestion.pk]),
+            follow=True,
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.redirect_chain[0][0],
+                         reverse(DETAIL, args=[suggestion.pk]))
+        self.assertEqual(
+            suggestion.status, MealSuggestion.Status.SUGGESTED
+        )
+        self.assertEqual(
+            InventoryEvent.objects.filter(
+                event_type=InventoryEvent.EventType.CONSUME
+            ).count(),
+            0,
+        )
+
+    # -- success + PRG + exact ledger deductions --------------------------------
+
+    def test_cook_success_is_prg_with_exact_deduction(self):
+        self._login("cook_a")
+        suggestion = self._fully_owned_suggestion(
+            self._cookable_suggestion(self.user_a)
+        )
+        lot = self.user_a.household.lots.get()
+        response = self.client.post(
+            reverse("inventory:meal_cook", args=[suggestion.pk])
+        )
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(response["Location"],
+                         reverse(DETAIL, args=[suggestion.pk]))
+        suggestion.refresh_from_db()
+        self.assertEqual(suggestion.status, MealSuggestion.Status.COOKED)
+        self.assertEqual(services.lot_balance(lot), Decimal("2"))
+        consumes = InventoryEvent.objects.filter(
+            event_type=InventoryEvent.EventType.CONSUME
+        )
+        self.assertEqual(consumes.count(), 1)
+        self.assertEqual(consumes.get().quantity, Decimal("-3"))
+        # Cooked state + recorded time on the detail page.
+        detail = self.client.get(reverse(DETAIL, args=[suggestion.pk]))
+        content = detail.content.decode("utf-8")
+        self.assertIn("Cooked on", content)
+        self.assertIn("status-cooked", content)
+        self.assertNotIn("Cook this meal", content)
+
+    def test_cook_success_shows_message_and_time_followed(self):
+        self._login("cook_a")
+        suggestion = self._fully_owned_suggestion(
+            self._cookable_suggestion(self.user_a)
+        )
+        response = self.client.post(
+            reverse("inventory:meal_cook", args=[suggestion.pk]), follow=True
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(len(response.redirect_chain), 1)
+        self.assertEqual(response.redirect_chain[0][0],
+                         reverse(DETAIL, args=[suggestion.pk]))
+        content = response.content.decode("utf-8")
+        self.assertIn("marked as cooked", content)
+        self.assertIn("Cooked on", content)
+
+    # -- duplicate: no second deduction ----------------------------------------
+
+    def test_duplicate_cook_post_does_not_deduct_twice(self):
+        self._login("cook_a")
+        suggestion = self._fully_owned_suggestion(
+            self._cookable_suggestion(self.user_a)
+        )
+        lot = self.user_a.household.lots.get()
+        url = reverse("inventory:meal_cook", args=[suggestion.pk])
+        first = self.client.post(url)
+        self.assertEqual(first.status_code, 302)
+        balance_after_first = services.lot_balance(lot)
+        second = self.client.post(url, follow=True)
+        self.assertEqual(second.status_code, 200)
+        self.assertEqual(services.lot_balance(lot), balance_after_first)
+        self.assertEqual(
+            InventoryEvent.objects.filter(
+                event_type=InventoryEvent.EventType.CONSUME
+            ).count(),
+            1,
+        )
+        self.assertEqual(
+            MealEvent.objects.filter(suggestion=suggestion).count(), 1
+        )
+        content = second.content.decode("utf-8")
+        self.assertIn("Cook not confirmed", content)
+        self.assertIn("already been cooked", content)
+
+    # -- recoverable failure: rollback + useful feedback ------------------------
+
+    def test_recoverable_service_error_renders_feedback_no_partial_writes(self):
+        """A recoverable InventoryServiceError from confirm_cook must re-render
+        the detail page with a user-safe message and zero partial writes."""
+        self._login("cook_a")
+        suggestion = self._fully_owned_suggestion(
+            self._cookable_suggestion(self.user_a)
+        )
+        lot = self.user_a.household.lots.get()
+
+        def failing_confirm_cook(*args, **kwargs):
+            del args, kwargs
+            raise exceptions.InsufficientStock(
+                "lot exploded before the write"
+            )
+
+        with mock.patch.object(services, "confirm_cook", failing_confirm_cook):
+            response = self.client.post(
+                reverse("inventory:meal_cook", args=[suggestion.pk])
+            )
+        self.assertEqual(response.status_code, 200)
+        content = response.content.decode("utf-8")
+        self.assertIn("Cook not confirmed", content)
+        self.assertIn("lot exploded before the write", content)
+        # No partial writes: suggestion unchanged, ledger untouched.
+        suggestion.refresh_from_db()
+        self.assertEqual(suggestion.status, MealSuggestion.Status.SUGGESTED)
+        self.assertEqual(services.lot_balance(lot), Decimal("5"))
+        self.assertEqual(
+            InventoryEvent.objects.filter(
+                event_type=InventoryEvent.EventType.CONSUME
+            ).count(),
+            0,
+        )
+
+    # -- blocked / missing-ingredient state --------------------------------------
+
+    def test_blocked_state_shows_plain_language(self):
+        self._login("cook_a")
+        # Missing Garlic entirely: suggestion is not cookable.
+        fake = FakeProvider(payload=valid_payload(
+            ingredients=[{"name": "Garlic", "unit": "g", "quantity": 10}],
+        ))
+        with mock.patch.object(meal_services, "get_provider",
+                               return_value=fake):
+            suggestion = meal_services.generate_suggestion(
+                household=self.user_a.household,
+            )
+        response = self.client.get(reverse(DETAIL, args=[suggestion.pk]))
+        content = response.content.decode("utf-8")
+        self.assertEqual(response.status_code, 200)
+        self.assertNotIn("Cook this meal", content)
+        self.assertIn("can’t be cooked yet", content)
+        self.assertIn("cook-state-blocked", content)
+        # POSTing the cook action must fail closed with the missing message.
+        post = self.client.post(
+            reverse("inventory:meal_cook", args=[suggestion.pk]), follow=True
+        )
+        post_content = post.content.decode("utf-8")
+        self.assertIn("Cook not confirmed", post_content)
+        self.assertIn("Garlic", post_content)
+        suggestion.refresh_from_db()
+        self.assertEqual(suggestion.status, MealSuggestion.Status.SUGGESTED)
+        # Two lots exist for user_a (Onion + Basil setup), so the expected
+        # ledger has exactly two ADD events and zero CONSUME events.
+        self.assertEqual(
+            InventoryEvent.objects.filter(
+                event_type=InventoryEvent.EventType.CONSUME
+            ).count(),
+            0,
+        )
+
+    def test_rejected_state_rendered(self):
+        self._login("cook_a")
+        suggestion = self._fully_owned_suggestion(
+            self._cookable_suggestion(self.user_a)
+        )
+        suggestion.status = MealSuggestion.Status.REJECTED
+        suggestion.save(update_fields=["status"])
+        response = self.client.get(reverse(DETAIL, args=[suggestion.pk]))
+        content = response.content.decode("utf-8")
+        self.assertNotIn("Cook this meal", content)
+        self.assertIn("was rejected and can’t be cooked", content)
+        self.assertIn("cook-state-rejected", content)
+        post = self.client.post(
+            reverse("inventory:meal_cook", args=[suggestion.pk]), follow=True
+        )
+        self.assertIn("Cook not confirmed", post.content.decode("utf-8"))
+
+    # -- cross-household isolation -------------------------------------------------
+
+    def test_cross_household_cook_get_and_post_are_404(self):
+        self._login("cook_a")
+        suggestion = self._fully_owned_suggestion(
+            self._cookable_suggestion(self.user_a)
+        )
+        lot = self.user_a.household.lots.get()
+        self.client.logout()
+        self._login("cook_b")
+        cook_url = reverse("inventory:meal_cook", args=[suggestion.pk])
+        self.assertEqual(self.client.get(cook_url).status_code, 404)
+        response = self.client.post(cook_url, follow=True)
+        self.assertEqual(response.status_code, 404)
+        suggestion.refresh_from_db()
+        self.assertEqual(suggestion.status, MealSuggestion.Status.SUGGESTED)
+        self.assertEqual(services.lot_balance(lot), Decimal("5"))
+        self.assertEqual(
+            MealEvent.objects.filter(suggestion=suggestion).count(), 0
+        )
+
+    def test_unknown_cook_pk_is_404(self):
+        import uuid
+
+        self._login("cook_a")
+        cook_url = reverse("inventory:meal_cook", args=[uuid.uuid4()])
+        self.assertEqual(self.client.get(cook_url).status_code, 404)
+        self.assertEqual(
+            self.client.post(cook_url, follow=True).status_code, 404
+        )
+
+    # -- narrow-width / accessible markup ------------------------------------------
+
+    def test_cook_form_markup_is_accessible_and_narrow_safe(self):
+        self._login("cook_a")
+        suggestion = self._fully_owned_suggestion(
+            self._cookable_suggestion(self.user_a)
+        )
+        content = self.client.get(
+            reverse(DETAIL, args=[suggestion.pk])
+        ).content.decode("utf-8")
+        # Semantic form + labeled button.
+        self.assertIn('<form method="post"', content)
+        self.assertIn(reverse("inventory:meal_cook", args=[suggestion.pk]),
+                      content)
+        self.assertIn('type="submit"', content)
+        self.assertIn("Cook this meal", content)
+        # The button uses the shared .btn class, which has no fixed width
+        # wider than its content; min-width on .cook-button is below the
+        # 390px viewport.
+        css = (
+            Path(__file__).resolve().parents[1]
+            / "static" / "inventory" / "styles.css"
+        ).read_text(encoding="utf-8")
+        self.assertIn(".cook-button", css)
+        self.assertIn("min-width: 11rem", css)
+        self.assertIn(".cook-state-cooked", css)
+        self.assertIn(".cook-state-blocked", css)
 
 
 class ViewFlowTests(TestCase):

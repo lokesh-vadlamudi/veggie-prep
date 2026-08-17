@@ -432,3 +432,17 @@ input[type="number"] { min-width: 0; }
   .meal-meta { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .ingredients-table, .history-table { font-size: 0.9rem; min-width: 38rem; }
 }
+
+/* --- Cook action (meal detail) ------------------------------------------------ */
+
+.cook-panel {
+  margin-top: 1rem;
+  padding-top: 0.75rem;
+  border-top: 1px solid var(--line);
+}
+.cook-form { display: inline-block; margin: 0; }
+.cook-button { min-width: 11rem; }
+.cook-state { margin: 0; font-weight: 600; }
+.cook-state-cooked { color: var(--ok-ink, #2f6f4f); }
+.cook-state-blocked,
+.cook-state-rejected { color: var(--danger, #a33); }

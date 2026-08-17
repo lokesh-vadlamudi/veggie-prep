@@ -94,5 +94,23 @@
     <p class="rationale">{{ suggestion.rationale }}</p>
   </section>
   {% endif %}
+
+  <section class="cook-panel" aria-labelledby="cook-heading">
+    <h2 id="cook-heading">Cook</h2>
+    {% if cook_state == "ready" %}
+    <form method="post" action="{% url 'inventory:meal_cook' pk=suggestion.pk %}" class="cook-form">
+      {% csrf_token %}
+      <button type="submit" class="btn btn-primary cook-button">Cook this meal</button>
+    </form>
+    {% elif cook_state == "cooked" %}
+    <p class="cook-state cook-state-cooked">
+      Cooked{% if cook_event %} on {{ cook_event.cooked_at|date:"Y-m-d H:i" }}{% endif %}.
+    </p>
+    {% elif cook_state == "rejected" %}
+    <p class="cook-state cook-state-rejected">This meal was rejected and can’t be cooked.</p>
+    {% else %}
+    <p class="cook-state cook-state-blocked">You’re missing ingredients, so this meal can’t be cooked yet.</p>
+    {% endif %}
+  </section>
 </article>
 {% endblock %}

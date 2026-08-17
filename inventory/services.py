@@ -455,6 +455,16 @@ def confirm_cook(*, household, suggestion):
         )
 
     # 3. Load immutable ingredient snapshots; reject missing stock.
+    #    Integrity check first: a snapshot row that names a different
+    #    household than the locked suggestion is a tampered snapshot and
+    #    is rejected before any write (its allocations could otherwise be
+    #    interpreted against the caller's ledger).
+    for ingredient in locked_suggestion.ingredients.order_by("name", "id"):
+        if ingredient.household_id != household.pk:
+            raise HouseholdMismatch(
+                f"Ingredient {ingredient.name!r} does not belong to this "
+                "household."
+            )
     ingredients = list(
         locked_suggestion.ingredients.order_by("name", "id")
     )
