@@ -25,6 +25,7 @@
   <h2>Adjust this lot</h2>
   <div class="inline-forms">
     <form class="inline-form" method="post" action="{% url 'inventory:consume' lot.pk %}">
+      {% csrf_token %}
       <p class="form-title">Consume</p>
       <label for="consume-quantity">Quantity ({{ lot.unit }})</label>
       <input type="number" id="consume-quantity" name="quantity" step="0.001" min="0.001" required inputmode="decimal">
@@ -35,6 +36,7 @@
     </form>
 
     <form class="inline-form" method="post" action="{% url 'inventory:discard' lot.pk %}">
+      {% csrf_token %}
       <p class="form-title">Discard</p>
       <label for="discard-quantity">Quantity ({{ lot.unit }})</label>
       <input type="number" id="discard-quantity" name="quantity" step="0.001" min="0.001" required inputmode="decimal">
@@ -45,6 +47,7 @@
     </form>
 
     <form class="inline-form" method="post" action="{% url 'inventory:correct' lot.pk %}">
+      {% csrf_token %}
       <p class="form-title">Correct balance</p>
       <label for="correct-observed">Observed balance ({{ lot.unit }})</label>
       <input type="number" id="correct-observed" name="observed_balance" step="0.001" min="0" required inputmode="decimal">

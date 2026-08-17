@@ -769,15 +769,88 @@ class CsrfAndTemplateTests(TestCase):
         pages = [
             self.client.get(reverse(DASHBOARD)),
             self.client.get(reverse(ADD)),
-            self.client.get(
-                reverse("inventory:lot_detail", args=[self.lot.pk])
-            ),
         ]
         self.client.logout()
         pages.append(self.client.get(reverse(LOGIN)))
         for page in pages:
             self.assertEqual(page.status_code, 200)
             self.assertContains(page, "csrfmiddlewaretoken")
+
+    def test_lot_detail_csrf_token_inside_each_action_form(self):
+        """Per-form assertion: one {% csrf_token %} inside each of the
+        consume / discard / correct <form> blocks. A whole-page substring
+        check is a false positive — it passes if any form on the page has a
+        token even when sibling forms are missing it."""
+        response = self.client.get(
+            reverse("inventory:lot_detail", args=[self.lot.pk])
+        )
+        self.assertEqual(response.status_code, 200)
+        content = response.content.decode("utf-8")
+        for action, marker in (
+            ("consume", "name=\"quantity\""),
+            ("discard", "name=\"quantity\""),
+            ("correct", "name=\"observed_balance\""),
+        ):
+            start = content.index(f"action=\"{reverse(f'inventory:{action}', args=[self.lot.pk])}\"")
+            end = content.index("</form>", start)
+            form_block = content[start:end]
+            self.assertIn(
+                "csrfmiddlewaretoken",
+                form_block,
+                f"consume/discard/correct form for {action!r} is missing a "
+                "csrf_token inside its own <form> block",
+            )
+
+    def test_get_token_then_post_succeeds_enforced_csrf(self):
+        """Regression: a token read from the rendered lot_detail page must be
+        accepted by an enforced-CSRF client on all three action endpoints
+        (proving the per-form tokens are the ones the POSTs read)."""
+        strict = Client(enforce_csrf_checks=True)
+        login(strict, self.user)
+        page = strict.get(reverse("inventory:lot_detail", args=[self.lot.pk]))
+        self.assertEqual(page.status_code, 200)
+        content = page.content.decode("utf-8")
+        import re
+
+        def token_for(action):
+            start = content.index(
+                f"action=\"{reverse(f'inventory:{action}', args=[self.lot.pk])}\""
+            )
+            end = content.index("</form>", start)
+            match = re.search(
+                r'name="csrfmiddlewaretoken" value="([^"]+)"', content[start:end]
+            )
+            self.assertIsNotNone(match, f"no token inside {action} form")
+            return match.group(1)
+
+        events_before = self.lot.events.count()
+        response = strict.post(
+            reverse("inventory:consume", args=[self.lot.pk]),
+            {"quantity": "1", "csrfmiddlewaretoken": token_for("consume")},
+        )
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(self.lot.events.count(), events_before + 1)
+        self.assertEqual(services.lot_balance(self.lot), Decimal("2.000"))
+
+        response = strict.post(
+            reverse("inventory:discard", args=[self.lot.pk]),
+            {"quantity": "1", "csrfmiddlewaretoken": token_for("discard")},
+        )
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(self.lot.events.count(), events_before + 2)
+        self.assertEqual(services.lot_balance(self.lot), Decimal("1.000"))
+
+        response = strict.post(
+            reverse("inventory:correct", args=[self.lot.pk]),
+            {
+                "observed_balance": "4",
+                "reason": "recounted",
+                "csrfmiddlewaretoken": token_for("correct"),
+            },
+        )
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(self.lot.events.count(), events_before + 3)
+        self.assertEqual(services.lot_balance(self.lot), Decimal("4.000"))
 
     def test_post_without_csrf_rejected_add(self):
         strict = Client(enforce_csrf_checks=True)
