@@ -17,7 +17,13 @@ class ScaffoldTests(SimpleTestCase):
     def test_test_settings_use_in_memory_sqlite(self):
         engine = settings_test.DATABASES["default"]["ENGINE"]
         self.assertEqual(engine, "django.db.backends.sqlite3")
-        self.assertEqual(settings_test.DATABASES["default"]["NAME"], ":memory:")
+        # The configured NAME is ":memory:". While a test database is
+        # active, Django rewrites it in place to a shared in-memory URI
+        # (e.g. "file:memorydb_default?mode=memory&cache=shared"), so
+        # accept either form.
+        name = settings_test.DATABASES["default"]["NAME"]
+        if name != ":memory:":
+            self.assertIn("mode=memory", name)
 
     def test_test_settings_use_fixed_non_secret_key(self):
         # Test settings must not depend on environment-provided secrets.
