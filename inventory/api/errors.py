@@ -13,12 +13,22 @@ from rest_framework.exceptions import (
 )
 from rest_framework.response import Response
 
+from inventory.ai.exceptions import (
+    AIConfigError,
+    AIMalformedOutputError,
+    AIOutputTooLargeError,
+    AIProviderError,
+    AIRequestError,
+)
 from inventory.exceptions import (
+    AllocationMismatch,
+    DuplicateMealEvent,
     HouseholdMismatch,
     InvalidAdjustment,
     InvalidQuantity,
     InvalidUnit,
     InsufficientStock,
+    SuggestionNotCookable,
     UnitMismatch,
 )
 
@@ -106,5 +116,80 @@ def service_error_response(exc):
             "invalid_quantity",
             str(exc),
             {"quantity": [str(exc)]},
+        )
+    raise exc
+
+
+def ai_error_response(code, message, http_status):
+    """Stable envelope for AI provider failures (no provider internals)."""
+    return error_response(code, message, http_status=http_status)
+
+
+def ai_service_error_response(exc):
+    """Map an AIProviderError subclass to a stable envelope.
+
+    Config/timeout/network/HTTP failures are recoverable 503
+    ``ai_unavailable``; schema/oversize violations are 422
+    ``invalid_provider_output``. Unknown provider exception types are
+    re-raised so programming errors are never converted to user errors.
+    """
+    if isinstance(exc, AIConfigError):
+        return error_response(
+            "ai_unavailable",
+            "The AI provider is not configured on this server.",
+            http_status=status.HTTP_503_SERVICE_UNAVAILABLE,
+        )
+    if isinstance(exc, AIRequestError):
+        return error_response(
+            "ai_unavailable",
+            "The AI provider request failed. Please try again.",
+            http_status=status.HTTP_503_SERVICE_UNAVAILABLE,
+        )
+    if isinstance(exc, (AIMalformedOutputError, AIOutputTooLargeError)):
+        return error_response(
+            "invalid_provider_output",
+            "The AI provider returned an unusable response.",
+            http_status=status.HTTP_422_UNPROCESSABLE_ENTITY,
+        )
+    if isinstance(exc, AIProviderError):
+        return error_response(
+            "ai_unavailable",
+            "The AI provider is unavailable.",
+            http_status=status.HTTP_503_SERVICE_UNAVAILABLE,
+        )
+    raise exc
+
+
+def cook_error_response(exc):
+    """Map a confirm_cook InventoryServiceError to a stable envelope.
+
+    Duplicate cook is 409 ``already_cooked``; every other cook-time conflict
+    (rejected state, missing stock, stale/insufficient balance, malformed or
+    household-mismatched allocation) is 409 ``cook_conflict``. Unknown
+    exception types are re-raised.
+    """
+    if isinstance(exc, HouseholdMismatch):
+        return not_found_response()
+    if isinstance(exc, DuplicateMealEvent):
+        return error_response(
+            "already_cooked",
+            "This meal has already been cooked.",
+            http_status=status.HTTP_409_CONFLICT,
+        )
+    if isinstance(
+        exc,
+        (
+            SuggestionNotCookable,
+            AllocationMismatch,
+            InvalidQuantity,
+            InvalidUnit,
+            UnitMismatch,
+            InsufficientStock,
+        ),
+    ):
+        return error_response(
+            "cook_conflict",
+            "This meal cannot be cooked right now.",
+            http_status=status.HTTP_409_CONFLICT,
         )
     raise exc

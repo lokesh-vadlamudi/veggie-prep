@@ -105,8 +105,12 @@ rejected with `400`).
 | `POST /api/v1/inventory/lots/<uuid>/consume/` | `quantity` (positive), optional `note`. `409 insufficient_stock` on over-consume. |
 | `POST /api/v1/inventory/lots/<uuid>/discard/` | `quantity` (positive), optional `note`. |
 | `POST /api/v1/inventory/lots/<uuid>/correct/` | `observed_balance` (≥ 0), required `reason`. `409 no_op_correction` when unchanged. |
+| `GET /api/v1/meals/` | Paginated household meal history, newest first (`-created_at, -id`). Optional exact `status` filter: `suggested`, `cooked`, `rejected`. |
+| `GET /api/v1/meals/<uuid>/` | Full immutable detail: proposal fields plus ordered ingredients with safe allocation entries only (`lot_id`, exact 3dp `quantity`, `unit`, per-lot `rescued`, `expires_on`). Malformed allocation entries are omitted; foreign-household lots are never exposed. |
+| `POST /api/v1/meals/generate/` | Generate one suggestion: `servings` (1–50), `max_minutes` (5–600), optional `dietary_exclusions` (list, ≤ 20), `preference`, `include_expired`. Calls the provider exactly once. `201` with `Location`; `503 ai_unavailable` on config/network/HTTP failure; `422 invalid_provider_output` on malformed/oversized provider output. Zero writes on any failure. |
+| `POST /api/v1/meals/<uuid>/cook/` | No body. Revalidates the snapshot against live balances and atomically consumes the allocated lots, records the cook, and marks the suggestion `cooked` (200 with refreshed status and `cooked_at`). `409 already_cooked` on duplicate; `409 cook_conflict` on rejected/stale/insufficient/malformed allocations with full rollback; foreign/unknown UUIDs are `404`. |
 
-Errors are a stable envelope: `{"error": {"code": ..., "message": ..., "fields": {...}}}` with codes `not_authenticated`, `csrf_failed`, `not_found`, `validation_error`, `insufficient_stock`, `no_op_correction`, `service_error`. All writes go through the transactional service layer only.
+Errors are a stable envelope: `{"error": {"code": ..., "message": ..., "fields": {...}}}` with codes `not_authenticated`, `csrf_failed`, `not_found`, `validation_error`, `insufficient_stock`, `no_op_correction`, `service_error`, `method_not_allowed`, `parse_error`, `unsupported_media_type`, `ai_unavailable`, `invalid_provider_output`, `already_cooked`, `cook_conflict`, `internal_error`. All writes go through the transactional service layer only.
 
 ## Tests
 
@@ -124,6 +128,9 @@ MealSuggestion, MealIngredient), the transactional inventory service layer,
 authenticated web workflow (dashboard, add/consume/discard/correct,
 auth/logout), and AI meal suggestion generation with deterministic
 reconciliation (form, result, history; household-scoped 404s; provider
-failure taxonomy), and the versioned DRF inventory API
-(`inventory/api/`, `/api/v1/inventory/lots/...`). Deferred: meal API,
-cook-confirmation flow for suggestions, and provider key/ops configuration.
+failure taxonomy), the versioned DRF inventory API
+(`inventory/api/`, `/api/v1/inventory/lots/...`), and the versioned meal API
+(`GET /api/v1/meals/`, `GET /api/v1/meals/<uuid>/`,
+`POST /api/v1/meals/generate/`, `POST /api/v1/meals/<uuid>/cook/` with
+exactly-once cook confirmation and full rollback on conflict). Deferred:
+provider key/ops configuration.

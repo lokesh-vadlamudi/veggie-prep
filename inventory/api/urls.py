@@ -1,8 +1,18 @@
-"""API v1 URL routes for the inventory endpoints (namespace: api)."""
+"""API v1 URL routes for the inventory and meal endpoints (namespace: api)."""
 
 from django.urls import path
 
-from .views import LotConsumeView, LotCorrectView, LotDiscardView, LotEventsView, LotViewSet
+from .views import (
+    LotConsumeView,
+    LotCorrectView,
+    LotDiscardView,
+    LotEventsView,
+    LotViewSet,
+    MealCookView,
+    MealDetailView,
+    MealGenerateView,
+    MealListView,
+)
 
 app_name = "api"
 
@@ -32,5 +42,21 @@ urlpatterns = [
         "inventory/lots/<uuid:pk>/correct/",
         LotCorrectView.as_view({"post": "post"}),
         name="lot_correct",
+    ),
+    path("meals/", MealListView.as_view({"get": "list"}), name="meals_list"),
+    path(
+        "meals/generate/",
+        MealGenerateView.as_view({"post": "post"}),
+        name="meal_generate",
+    ),
+    path(
+        "meals/<uuid:pk>/",
+        MealDetailView.as_view({"get": "retrieve"}),
+        name="meal_detail",
+    ),
+    path(
+        "meals/<uuid:pk>/cook/",
+        MealCookView.as_view({"post": "post"}),
+        name="meal_cook",
     ),
 ]

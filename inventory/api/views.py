@@ -14,11 +14,14 @@ from rest_framework import exceptions as drf_exceptions
 from rest_framework import status, viewsets
 from rest_framework.response import Response
 
-from inventory import services
+from inventory import meal_services, services
+from inventory.ai.exceptions import AIProviderError
 from inventory.exceptions import InventoryServiceError
-from inventory.models import InventoryEvent, StockLot
+from inventory.models import InventoryEvent, MealSuggestion, StockLot
 
 from .errors import (
+    ai_service_error_response,
+    cook_error_response,
     csrf_failed_response,
     error_response,
     not_found_response,
@@ -30,8 +33,11 @@ from .pagination import ApiPageNumberPagination
 from .serializers import (
     AddLotCommandSerializer,
     CorrectLotCommandSerializer,
+    GenerateMealCommandSerializer,
     LotEventSerializer,
     LotSerializer,
+    MealSuggestionSerializer,
+    MealSuggestionSummarySerializer,
     MutateLotCommandSerializer,
 )
 
@@ -344,3 +350,126 @@ class LotCorrectView(_LotCommandMixin, viewsets.GenericViewSet):
             )
 
         return self._dispatch(request, pk, call)
+
+
+# --- meal API -------------------------------------------------------------------
+
+
+class _MealNotFound(Exception):
+    """Internal marker for a foreign/unknown meal suggestion."""
+
+
+def _owned_suggestion(request, pk):
+    """404-safe lookup of a suggestion owned by the request's household."""
+    household = _household(request)
+    suggestion = MealSuggestion.objects.filter(
+        pk=pk, household_id=household.pk
+    ).select_related("meal_event").first()
+    if suggestion is None:
+        raise _MealNotFound()
+    return suggestion
+
+
+class MealListView(viewsets.GenericViewSet):
+    """GET /api/v1/meals/ — household meal history, newest first."""
+
+    serializer_class = MealSuggestionSummarySerializer
+    pagination_class = ApiPageNumberPagination
+
+    def list(self, request, *args, **kwargs):
+        household = _household(request)
+        suggestions = list(
+            MealSuggestion.objects.filter(household=household)
+            .select_related("meal_event")
+            .prefetch_related("ingredients")
+            .order_by("-created_at", "-id")
+        )
+        status_param = request.query_params.get("status")
+        if status_param is not None:
+            valid = {v for v, _ in MealSuggestion.Status.choices}
+            if status_param not in valid:
+                return error_response(
+                    "validation_error",
+                    "status must be one of suggested, cooked, rejected.",
+                    {"status": ["status must be one of suggested, cooked, rejected."]},
+                )
+            suggestions = [s for s in suggestions if s.status == status_param]
+        page = self.paginate_queryset(suggestions)
+        return self.get_paginated_response(
+            MealSuggestionSummarySerializer(page, many=True).data
+        )
+
+
+class MealDetailView(viewsets.GenericViewSet):
+    """GET /api/v1/meals/<uuid>/ — full immutable household detail."""
+
+    def retrieve(self, request, pk, *args, **kwargs):
+        try:
+            suggestion = _owned_suggestion(request, pk)
+        except _MealNotFound:
+            return not_found_response()
+        return Response(
+            MealSuggestionSerializer(suggestion).data,
+            status=status.HTTP_200_OK,
+        )
+
+
+class MealGenerateView(viewsets.GenericViewSet):
+    """POST /api/v1/meals/generate/ — one provider call, one service call."""
+
+    def post(self, request, *args, **kwargs):
+        serializer = GenerateMealCommandSerializer(data=request.data)
+        if not serializer.is_valid():
+            return validation_response(serializer)
+        data = serializer.validated_data
+        household = _household(request)
+        try:
+            suggestion = meal_services.generate_suggestion(
+                household=household,
+                servings=data["servings"],
+                max_minutes=data["max_minutes"],
+                dietary_exclusions=", ".join(data["dietary_exclusions"]),
+                preference=data["preference"],
+                include_expired=data["include_expired"],
+            )
+        except AIProviderError as exc:
+            return ai_service_error_response(exc)
+        suggestion = (
+            MealSuggestion.objects.select_related("meal_event")
+            .filter(pk=suggestion.pk)
+            .first()
+        )
+        response = Response(
+            MealSuggestionSerializer(suggestion).data,
+            status=status.HTTP_201_CREATED,
+        )
+        response.headers["Location"] = f"/api/v1/meals/{suggestion.pk}/"
+        return response
+
+
+class MealCookView(viewsets.GenericViewSet):
+    """POST /api/v1/meals/<uuid>/cook/ — exactly-once cook confirmation."""
+
+    def post(self, request, pk, *args, **kwargs):
+        # Household lookup happens before the service call so foreign/unknown
+        # UUIDs are a clean 404 and no service side effect can occur.
+        try:
+            suggestion = _owned_suggestion(request, pk)
+        except _MealNotFound:
+            return not_found_response()
+        household = _household(request)
+        try:
+            services.confirm_cook(household=household, suggestion=suggestion.pk)
+        except InventoryServiceError as exc:
+            return cook_error_response(exc)
+        # Re-fetch after the service transaction so status + cooked_at are
+        # the post-mutation state.
+        refreshed = (
+            MealSuggestion.objects.select_related("meal_event")
+            .filter(pk=pk, household_id=household.pk)
+            .first()
+        )
+        return Response(
+            MealSuggestionSerializer(refreshed).data,
+            status=status.HTTP_200_OK,
+        )
