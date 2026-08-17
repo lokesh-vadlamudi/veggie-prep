@@ -60,7 +60,7 @@ def _api_exception_handler(exc, context):
     if view is not None:
         # The handler is registered globally but must only shape API errors.
         path = getattr(getattr(view, "request", None), "path", "")
-        if not path.startswith("/api/"):
+        if not path.startswith("/api/v1/"):
             return None
 
     if isinstance(exc, drf_exceptions.NotAuthenticated):

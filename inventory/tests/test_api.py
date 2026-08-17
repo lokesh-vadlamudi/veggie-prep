@@ -5,6 +5,7 @@ All writes go through the API views (service-only writes); fixture setup
 uses the service layer directly.
 """
 
+import types
 import uuid
 from decimal import Decimal
 
@@ -724,3 +725,47 @@ class DrfNativeExceptionTests(TestCase):
         self.assertEqual(response.status_code, 415)
         self.assertEqual(error_body(response)["code"], "unsupported_media_type")
         self.assertEqual(self.lot.events.count(), 1)
+
+
+class HandlerPathScopeTests(TestCase):
+    """The API exception handler shapes only the ``/api/v1/`` prefix;
+    other paths return ``None`` so HTML behavior is unchanged."""
+
+    @staticmethod
+    def _context(path):
+        class _View:
+            pass
+
+        view = _View()
+        request = types.SimpleNamespace(path=path)
+        view.request = request
+        return {"view": view}
+
+    def test_api_v1_not_found_is_shaped(self):
+        from inventory.api.views import _api_exception_handler
+        from rest_framework import exceptions as drf_exceptions
+
+        response = _api_exception_handler(
+            drf_exceptions.NotFound(), self._context("/api/v1/inventory/lots/")
+        )
+        self.assertIsNotNone(response)
+        self.assertEqual(response.status_code, 404)
+        self.assertEqual(response.data["error"]["code"], "not_found")
+
+    def test_api_other_prefix_is_not_shaped(self):
+        from inventory.api.views import _api_exception_handler
+        from rest_framework import exceptions as drf_exceptions
+
+        response = _api_exception_handler(
+            drf_exceptions.NotFound(), self._context("/api/other/lots/")
+        )
+        self.assertIsNone(response)
+
+    def test_html_path_is_not_shaped(self):
+        from inventory.api.views import _api_exception_handler
+        from rest_framework import exceptions as drf_exceptions
+
+        response = _api_exception_handler(
+            drf_exceptions.NotFound(), self._context("/inventory/dashboard/")
+        )
+        self.assertIsNone(response)
