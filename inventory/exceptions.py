@@ -33,3 +33,15 @@ class InvalidAdjustment(InventoryServiceError):
 
 class InsufficientStock(InventoryServiceError):
     """The mutation would drive the lot balance negative."""
+
+
+class SuggestionNotCookable(InventoryServiceError):
+    """The suggestion is not in a cookable state (wrong status or household)."""
+
+
+class DuplicateMealEvent(InventoryServiceError):
+    """A MealEvent already exists for this suggestion; cook is not repeatable."""
+
+
+class AllocationMismatch(InventoryServiceError):
+    """Cook allocations do not match the stored MealIngredient allocations."""

@@ -321,3 +321,58 @@ class MealIngredient(UUIDModel):
 
     def __str__(self):
         return f"{self.name} ({self.required_quantity} {self.unit})"
+
+
+class MealEvent(UUIDModel):
+    """An immutable record that a suggested meal was cooked.
+
+    Household-scoped, exactly one per suggestion (``OneToOne`` to
+    ``MealSuggestion``): cook confirmation creates a single event that
+    freezes the outcome and when it happened. Append-only like
+    ``InventoryEvent``: ``save`` refuses to update an existing event and
+    ``delete`` always raises.
+    """
+
+    class Outcome(models.TextChoices):
+        SUCCESS = "success", "success"
+        FAILED = "failed", "failed"
+
+    household = models.ForeignKey(
+        Household, on_delete=models.CASCADE, related_name="meal_events"
+    )
+    suggestion = models.OneToOneField(
+        MealSuggestion, on_delete=models.CASCADE, related_name="meal_event"
+    )
+    outcome = models.CharField(
+        max_length=10, choices=Outcome.choices, default=Outcome.SUCCESS
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ("-created_at",)
+
+    def __str__(self):
+        return f"MealEvent {self.id} ({self.outcome}, suggestion {self.suggestion_id})"
+
+    def clean(self):
+        super().clean()
+        if self.pk or self.suggestion_id:
+            suggestion = self.suggestion
+            if suggestion.household_id != self.household_id:
+                raise ValidationError(
+                    {"suggestion": "Event's suggestion must belong to the same household."}
+                )
+
+    def save(self, *args, **kwargs):
+        # A freshly constructed instance has _state.adding=True; once the
+        # first save succeeds Django flips it to False. Any subsequent save
+        # (including update_fields) is therefore rejected.
+        if not self._state.adding:
+            raise ValueError(
+                "MealEvent is append-only; existing events cannot be updated."
+            )
+        kwargs["force_insert"] = True
+        return super().save(*args, **kwargs)
+
+    def delete(self, *args, **kwargs):
+        raise ValueError("MealEvent is append-only; events cannot be deleted.")

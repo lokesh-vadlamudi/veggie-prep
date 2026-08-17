@@ -14,7 +14,14 @@ from django.core.exceptions import ValidationError
 from django.db import IntegrityError, transaction
 from django.test import TestCase
 
-from inventory.models import Household, InventoryEvent, Product, StockLot
+from inventory.models import (
+    Household,
+    InventoryEvent,
+    MealEvent,
+    MealSuggestion,
+    Product,
+    StockLot,
+)
 
 
 def make_household(name="House 1"):
@@ -292,5 +299,86 @@ class InventoryEventTests(TestCase):
 
     def test_second_save_of_same_instance_raises(self):
         event = self._event()
+        with self.assertRaises(ValueError):
+            event.save()
+
+
+def make_suggestion(household, title="Stir-fried greens"):
+    return MealSuggestion.objects.create(
+        household=household, title=title, servings=2, time_minutes=20
+    )
+
+
+class MealEventTests(TestCase):
+    def _event(self, household, suggestion):
+        return MealEvent.objects.create(household=household, suggestion=suggestion)
+
+    def test_create_event_with_uuid_pk_and_timestamp(self):
+        household = make_household()
+        suggestion = make_suggestion(household)
+        event = self._event(household, suggestion)
+        self.assertEqual(type(event.pk), uuid.UUID)
+        self.assertEqual(event.outcome, MealEvent.Outcome.SUCCESS)
+        self.assertIsNotNone(event.created_at)
+        self.assertEqual(household.meal_events.get(), event)
+
+    def test_outcome_choices_validated(self):
+        household = make_household()
+        suggestion = make_suggestion(household)
+        event = MealEvent(
+            household=household,
+            suggestion=suggestion,
+            outcome="exploded",
+        )
+        with self.assertRaises(ValidationError):
+            event.full_clean()
+
+    def test_exactly_one_event_per_suggestion(self):
+        household = make_household()
+        suggestion = make_suggestion(household)
+        self._event(household, suggestion)
+        with self.assertRaises(IntegrityError):
+            with transaction.atomic():
+                self._event(household, suggestion)
+        # Reverse accessor sees the single event.
+        suggestion.refresh_from_db()
+        self.assertEqual(suggestion.meal_event.outcome, "success")
+
+    def test_event_must_share_suggestion_household(self):
+        a = make_household("House A")
+        b = make_household("House B")
+        suggestion = make_suggestion(a)
+        event = MealEvent(household=b, suggestion=suggestion)
+        with self.assertRaises(ValidationError) as ctx:
+            event.full_clean()
+        self.assertIn("suggestion", ctx.exception.message_dict)
+
+    def test_matching_households_pass_clean(self):
+        household = make_household()
+        suggestion = make_suggestion(household)
+        event = MealEvent(household=household, suggestion=suggestion)
+        event.full_clean()
+
+    def test_cannot_update_existing_event(self):
+        household = make_household()
+        event = self._event(household, make_suggestion(household))
+        event.outcome = MealEvent.Outcome.FAILED
+        with self.assertRaises(ValueError):
+            event.save()
+        with self.assertRaises(ValueError):
+            event.save(update_fields=["outcome"])
+        reloaded = MealEvent.objects.get(pk=event.pk)
+        self.assertEqual(reloaded.outcome, "success")
+
+    def test_cannot_delete_existing_event(self):
+        household = make_household()
+        event = self._event(household, make_suggestion(household))
+        with self.assertRaises(ValueError):
+            event.delete()
+        self.assertTrue(MealEvent.objects.filter(pk=event.pk).exists())
+
+    def test_second_save_of_same_instance_raises(self):
+        household = make_household()
+        event = self._event(household, make_suggestion(household))
         with self.assertRaises(ValueError):
             event.save()

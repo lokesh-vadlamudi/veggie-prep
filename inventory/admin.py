@@ -3,6 +3,7 @@ from django.contrib import admin
 from .models import (
     Household,
     InventoryEvent,
+    MealEvent,
     MealIngredient,
     MealSuggestion,
     Product,
@@ -92,6 +93,27 @@ class InventoryEventAdmin(admin.ModelAdmin):
         return False
 
 
+class MealEventInline(admin.TabularInline):
+    """Read-only: cook events are created by the confirm service and are
+    append-only."""
+
+    model = MealEvent
+    extra = 0
+    readonly_fields = (
+        "id",
+        "household",
+        "suggestion",
+        "outcome",
+        "created_at",
+    )
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_delete_permission(self, request, obj=None):
+        return False
+
+
 class MealIngredientInline(admin.TabularInline):
     """Read-only: reconciliation snapshots are created by the generation
     service and never edited in the admin."""
@@ -144,7 +166,7 @@ class MealSuggestionAdmin(admin.ModelAdmin):
         "provider_model",
         "created_at",
     )
-    inlines = (MealIngredientInline,)
+    inlines = (MealEventInline, MealIngredientInline)
     actions = None
 
     def has_add_permission(self, request):
@@ -185,6 +207,39 @@ class MealIngredientAdmin(admin.ModelAdmin):
     actions = None
 
     def has_add_permission(self, request):
+        return False
+
+    def has_change_permission(self, request, obj=None):
+        return False
+
+    def has_delete_permission(self, request, obj=None):
+        return False
+
+
+@admin.register(MealEvent)
+class MealEventAdmin(admin.ModelAdmin):
+    """Read-only: events are append-only and never edited or removed."""
+
+    list_display = (
+        "id",
+        "suggestion",
+        "outcome",
+        "household",
+        "created_at",
+    )
+    list_filter = ("outcome", "household")
+    search_fields = ("suggestion__title",)
+    readonly_fields = (
+        "id",
+        "household",
+        "suggestion",
+        "outcome",
+        "created_at",
+    )
+    actions = None
+
+    def has_add_permission(self, request):
+        # Events are created by the confirm-cook service, not by the admin.
         return False
 
     def has_change_permission(self, request, obj=None):
