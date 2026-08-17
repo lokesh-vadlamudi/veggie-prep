@@ -9,7 +9,7 @@ through the fake provider stand-in; no network is touched.
 
 import json
 import uuid
-from datetime import timedelta, timezone as _dt_timezone
+from datetime import date, timedelta, timezone as _dt_timezone
 from decimal import Decimal
 
 from django.contrib.auth import get_user_model
@@ -365,6 +365,71 @@ class MealDetailTests(TestCase):
         assert body["ingredients"][0]["allocations"] == []
         assert body["ingredients"][0]["name"] == "Onion"
 
+    def test_tampered_ingredient_household_never_exposes_foreign_allocation(self):
+        """Regression: ``MealIngredient.household`` is not integrity-linked
+        to ``suggestion.household``. A tampered ingredient row under an owned
+        suggestion that names a foreign household must not cause the
+        serializer to look up lots under that foreign household."""
+        from inventory.models import StockLot
+
+        suggestion = make_suggestion(self.user, title="Tampered Household")
+        foreign_household = self.other.household
+        foreign_lot = make_lot(self.other, "Onion", "5.000", unit="count")
+        # Give the foreign lot a distinctive expiry date so a leak via the
+        # tampered row's lookup would be detectable in the body.
+        StockLot.objects.filter(pk=foreign_lot.pk).update(
+            expires_on=date(1970, 1, 1)
+        )
+        # The tampered row claims the foreign household and points at a
+        # foreign lot; the serializer must scope lookups to the owning
+        # (authenticated) household, so nothing foreign is emitted.
+        MealIngredient.objects.create(
+            suggestion=suggestion,
+            household=foreign_household,
+            name="Onion",
+            unit="count",
+            required_quantity=Decimal("5.000"),
+            owned_quantity=Decimal("5.000"),
+            missing_quantity=Decimal("0.000"),
+            rescued=False,
+            allocations=[{"lot": str(foreign_lot.pk), "quantity": "5", "rescued": False}],
+        )
+        body = get_meal_detail(self.client, suggestion)
+        entries = body["ingredients"][0]["allocations"]
+        assert entries == []
+        assert str(foreign_lot.pk) not in json.dumps(body)
+        assert "1970-01-01" not in json.dumps(body)
+
+    def test_stored_allocation_quantity_fail_closed_when_imprecise(self):
+        """Regression: zero, negative, non-finite, out-of-range, and >3dp
+        stored allocation quantities are omitted entirely, never
+        quantized/guessed. Exact positive quantities still emit as exact
+        3dp strings."""
+        suggestion = make_suggestion(self.user, title="Quantity Bounds")
+        lot = make_lot(self.user, "Onion", "1.000", unit="count")
+        MealIngredient.objects.create(
+            suggestion=suggestion,
+            household=self.user.household,
+            name="Onion",
+            unit="count",
+            required_quantity=Decimal("1.000"),
+            owned_quantity=Decimal("1.000"),
+            missing_quantity=Decimal("0.000"),
+            rescued=False,
+            allocations=[
+                {"lot": str(lot.pk), "quantity": "5"},          # exact -> emitted
+                {"lot": str(lot.pk), "quantity": "0"},           # zero -> omitted
+                {"lot": str(lot.pk), "quantity": "-2"},          # negative -> omitted
+                {"lot": str(lot.pk), "quantity": "NaN"},         # non-finite -> omitted
+                {"lot": str(lot.pk), "quantity": "123456789012345"},  # out of range -> omitted
+                {"lot": str(lot.pk), "quantity": "0.0001"},      # >3dp -> omitted
+            ],
+        )
+        body = get_meal_detail(self.client, suggestion)
+        entries = body["ingredients"][0]["allocations"]
+        assert [e["quantity"] for e in entries] == ["5.000"]
+        assert all(e["lot_id"] == str(lot.pk) for e in entries)
+
 
 class MealGenerateAuthTests(TestCase):
     """POST /api/v1/meals/generate/ — auth and CSRF boundaries."""
@@ -507,6 +572,30 @@ class MealGenerateSuccessTests(TestCase):
         assert reqs["dietary_exclusions"] == ""
         assert reqs["preference"] == ""
         assert reqs["include_expired"] is False
+
+    def test_generate_calls_service_exactly_once(self):
+        """Harness gap closure: the generate endpoint must call
+        ``meal_services.generate_suggestion`` exactly once on success."""
+        from unittest.mock import call as mock_call, patch
+
+        fake = FakeProvider()
+        with _patch_provider(fake), patch(
+            "inventory.api.views.meal_services.generate_suggestion",
+            wraps=meal_services.generate_suggestion,
+        ) as wrapped:
+            response = self._post_body()
+        assert response.status_code == 201, response.content
+        assert wrapped.call_count == 1
+        assert wrapped.call_args_list == [
+            mock_call(
+                household=self.user.household,
+                servings=2,
+                max_minutes=30,
+                dietary_exclusions="nuts, dairy",
+                preference="light",
+                include_expired=False,
+            )
+        ]
 
 
 class MealGenerateFailureTests(TestCase):
@@ -779,3 +868,42 @@ class MealCookTests(TestCase):
         suggestion.refresh_from_db()
         assert suggestion.status == MealSuggestion.Status.SUGGESTED
         assert MealEvent.objects.count() == 0
+
+    def test_foreign_allocation_cook_is_409_cook_conflict(self):
+        """Regression: after the view has verified ownership, a
+        ``HouseholdMismatch`` raised by ``confirm_cook`` (tampered/foreign
+        allocation) is a conflict, not a 404."""
+        suggestion, _ = self._cookable_suggestion()
+        foreign_household = self.other.household
+        foreign_lot = make_lot(self.other, "Onion", "3.000", unit="count")
+        # Tamper the snapshot to point at a foreign household's lot.
+        suggestion.ingredients.update(
+            household=foreign_household,
+            allocations=[
+                {"lot": str(foreign_lot.pk), "quantity": "3", "rescued": False}
+            ],
+        )
+        response = self._post(suggestion)
+        assert response.status_code == 409, response.content
+        assert error_body(response)["code"] == "cook_conflict"
+        suggestion.refresh_from_db()
+        assert suggestion.status == MealSuggestion.Status.SUGGESTED
+        assert MealEvent.objects.count() == 0
+        assert services.lot_balance(foreign_lot) == Decimal("3.000")
+
+    def test_cook_calls_service_exactly_once(self):
+        """Harness gap closure: the cook endpoint must call
+        ``services.confirm_cook`` exactly once on success."""
+        from unittest.mock import call as mock_call, patch
+
+        suggestion, lot = self._cookable_suggestion()
+        with patch(
+            "inventory.api.views.services.confirm_cook",
+            wraps=services.confirm_cook,
+        ) as wrapped:
+            response = self._post(suggestion)
+        assert response.status_code == 200, response.content
+        assert wrapped.call_count == 1
+        assert wrapped.call_args_list == [
+            mock_call(household=self.user.household, suggestion=suggestion.pk)
+        ]

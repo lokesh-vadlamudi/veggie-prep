@@ -165,11 +165,14 @@ def cook_error_response(exc):
 
     Duplicate cook is 409 ``already_cooked``; every other cook-time conflict
     (rejected state, missing stock, stale/insufficient balance, malformed or
-    household-mismatched allocation) is 409 ``cook_conflict``. Unknown
-    exception types are re-raised.
+    foreign/tampered allocation) is 409 ``cook_conflict``. Unknown exception
+    types are re-raised.
+
+    ``HouseholdMismatch`` here means a tampered/foreign allocation under an
+    already household-verified suggestion (the view performs its 404 check
+    before calling the service), so it maps to the same 409 conflict —
+    never to 404.
     """
-    if isinstance(exc, HouseholdMismatch):
-        return not_found_response()
     if isinstance(exc, DuplicateMealEvent):
         return error_response(
             "already_cooked",
@@ -179,6 +182,7 @@ def cook_error_response(exc):
     if isinstance(
         exc,
         (
+            HouseholdMismatch,
             SuggestionNotCookable,
             AllocationMismatch,
             InvalidQuantity,

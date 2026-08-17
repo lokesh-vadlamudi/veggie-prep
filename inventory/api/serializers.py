@@ -236,9 +236,18 @@ class _QuantityMixin:
 
 
 class MealIngredientSerializer(_QuantityMixin, serializers.ModelSerializer):
-    """Immutable ingredient snapshot with safe allocations only."""
+    """Immutable ingredient snapshot with safe allocations only.
+
+    ``household_pk`` is the authenticated request's household pk, passed
+    by :class:`MealSuggestionSerializer`; allocation lots are only ever
+    looked up under that household, never the ingredient's own.
+    """
 
     _quantity_fields = ("required_quantity", "owned_quantity", "missing_quantity")
+
+    def __init__(self, *args, household_pk=None, **kwargs):
+        self._allocation_household_pk = household_pk
+        super().__init__(*args, **kwargs)
     allocations = serializers.SerializerMethodField()
 
     class Meta:
@@ -272,14 +281,27 @@ class MealIngredientSerializer(_QuantityMixin, serializers.ModelSerializer):
             return None
 
     def get_allocations(self, ingredient):
-        """Safe allocation entries: only household-owned lots, service-safe
-        fields, quantities rendered as exact 3dp strings.
+        """Safe allocation entries: only lots owned by the owning household,
+        service-safe fields, quantities rendered as exact 3dp strings.
 
-        Malformed entries (unparseable lot ids or quantities) are omitted
-        entirely so every emitted quantity stays an exact 3dp string and
-        no foreign or unknown lot is ever exposed.
+        The lookup is always scoped to the authenticated request's
+        household (``self._allocation_household_pk``, passed by the
+        top-level suggestion serializer) — never to
+        ``ingredient.household_id``, which is not integrity-linked to the
+        suggestion's household and could be tampered on a foreign
+        ingredient row.
+
+        Malformed entries (unparseable lot ids, or quantities that are
+        negative, zero, non-finite, out of range, or need more than 3
+        places) are omitted entirely so every emitted quantity stays an
+        exact 3dp string and no foreign or unknown lot is ever exposed.
         """
-        household_pk = ingredient.household_id
+        # The owning (authenticated) household pk is always passed by the
+        # top-level suggestion serializer; there is no fallback to
+        # ``ingredient.household_id``, which is not integrity-linked to the
+        # suggestion and could be tampered on a foreign ingredient row.
+        if self._allocation_household_pk is None:
+            return []
         entries = [e for e in (ingredient.allocations or []) if isinstance(e, dict)]
         pks = []
         for entry in entries:
@@ -288,7 +310,9 @@ class MealIngredientSerializer(_QuantityMixin, serializers.ModelSerializer):
                 pks.append(pk)
         lots = {
             lot.pk: lot
-            for lot in StockLot.objects.filter(pk__in=pks, household_id=household_pk)
+            for lot in StockLot.objects.filter(
+                pk__in=pks, household_id=self._allocation_household_pk
+            )
         }
         out = []
         for entry in entries:
@@ -298,14 +322,19 @@ class MealIngredientSerializer(_QuantityMixin, serializers.ModelSerializer):
                 # expose it.
                 continue
             try:
-                quantity = _format_quantity(entry.get("quantity"))
+                quantity = _to_exact_decimal(entry.get("quantity"))
             except (InvalidOperation, ValueError, TypeError):
-                # Malformed quantity: omit the entry entirely.
+                # Fail closed: omit non-finite, out-of-range, >3dp stored
+                # quantities instead of quantizing them.
+                continue
+            if quantity <= 0:
+                # Fail closed: _to_exact_decimal does not reject zero or
+                # negative by itself.
                 continue
             out.append(
                 {
                     "lot_id": str(lot.pk),
-                    "quantity": quantity,
+                    "quantity": _format_quantity(quantity),
                     "unit": ingredient.unit,
                     "rescued": bool(entry.get("rescued", False)),
                     "expires_on": lot.expires_on.isoformat() if lot.expires_on else None,
@@ -338,6 +367,21 @@ class MealSuggestionSerializer(serializers.ModelSerializer):
             "ingredients",
         )
         read_only_fields = fields
+
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        # Re-render ingredients with the owning household scoped in so
+        # allocation lookups never consult a tampered
+        # ``ingredient.household_id``.
+        data["ingredients"] = [
+            dict(
+                MealIngredientSerializer(
+                    i, household_pk=instance.household_id
+                ).data
+            )
+            for i in instance.ingredients.all()
+        ]
+        return data
 
     def get_cooked_at(self, suggestion):
         return _cooked_at(suggestion)
