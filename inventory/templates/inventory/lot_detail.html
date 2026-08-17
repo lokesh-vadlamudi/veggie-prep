@@ -1,0 +1,87 @@
+{% extends "base.html" %}
+{% load tz %}
+
+{% block title %}{{ lot.product.name }} · Veggie Prep{% endblock %}
+
+{% block content %}
+<h1>{{ lot.product.name }}</h1>
+
+<section class="card" aria-label="Lot details">
+  <dl class="detail-grid">
+    <dt>Current balance</dt>
+    <dd class="big-balance">{{ balance }} <span class="unit">{{ lot.unit }}</span></dd>
+    <dt>Original lot size</dt>
+    <dd>{{ lot.quantity }} <span class="unit">{{ lot.unit }}</span></dd>
+    <dt>Location</dt>
+    <dd><span class="badge">{{ lot.location }}</span></dd>
+    <dt>Purchased</dt>
+    <dd>{% if lot.purchased_at %}{{ lot.purchased_at|date:"Y-m-d" }}{% else %}—{% endif %}</dd>
+    <dt>Expiry</dt>
+    <dd>{% if lot.expires_on %}{{ lot.expires_on|date:"Y-m-d" }}{% else %}No expiry date{% endif %}</dd>
+  </dl>
+</section>
+
+<section class="card" aria-label="Adjust this lot">
+  <h2>Adjust this lot</h2>
+  <div class="inline-forms">
+    <form class="inline-form" method="post" action="{% url 'inventory:consume' lot.pk %}">
+      <p class="form-title">Consume</p>
+      <label for="consume-quantity">Quantity ({{ lot.unit }})</label>
+      <input type="number" id="consume-quantity" name="quantity" step="0.001" min="0.001" required inputmode="decimal">
+      <label for="consume-note">Note <span class="optional">(optional)</span></label>
+      <input type="text" id="consume-note" name="note" maxlength="200">
+      {% include "inventory/_action_errors.html" with action_name="consume" form=consume_form active_action=active_action %}
+      <button type="submit" class="btn">Consume</button>
+    </form>
+
+    <form class="inline-form" method="post" action="{% url 'inventory:discard' lot.pk %}">
+      <p class="form-title">Discard</p>
+      <label for="discard-quantity">Quantity ({{ lot.unit }})</label>
+      <input type="number" id="discard-quantity" name="quantity" step="0.001" min="0.001" required inputmode="decimal">
+      <label for="discard-note">Note <span class="optional">(optional)</span></label>
+      <input type="text" id="discard-note" name="note" maxlength="200">
+      {% include "inventory/_action_errors.html" with action_name="discard" form=discard_form active_action=active_action %}
+      <button type="submit" class="btn">Discard</button>
+    </form>
+
+    <form class="inline-form" method="post" action="{% url 'inventory:correct' lot.pk %}">
+      <p class="form-title">Correct balance</p>
+      <label for="correct-observed">Observed balance ({{ lot.unit }})</label>
+      <input type="number" id="correct-observed" name="observed_balance" step="0.001" min="0" required inputmode="decimal">
+      <label for="correct-reason">Reason</label>
+      <input type="text" id="correct-reason" name="reason" maxlength="200" required>
+      <p class="hint">The correction delta (observed − current) is applied automatically as an ADJUST event.</p>
+      {% include "inventory/_action_errors.html" with action_name="correct" form=correct_form active_action=active_action %}
+      <button type="submit" class="btn">Apply correction</button>
+    </form>
+  </div>
+</section>
+
+<section class="card history" aria-labelledby="history-heading">
+  <h2 id="history-heading">History (append-only)</h2>
+  {% if events %}
+  <div class="table-wrap">
+  <table>
+    <thead>
+      <tr><th scope="col">When</th><th scope="col">Event</th><th scope="col">Quantity</th><th scope="col">Unit</th><th scope="col">Note</th></tr>
+    </thead>
+    <tbody>
+      {% for event in events %}
+      <tr>
+        <td>{{ event.created_at|localtime }}</td>
+        <td>{{ event.get_event_type_display }}</td>
+        <td class="{% if event.quantity >= 0 %}qty-pos{% else %}qty-neg{% endif %}">
+          {% if event.quantity >= 0 %}+{% endif %}{{ event.quantity }}
+        </td>
+        <td>{{ event.unit }}</td>
+        <td>{{ event.note|default:"—" }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  </div>
+  {% else %}
+  <p class="empty-state">No events recorded for this lot yet.</p>
+  {% endif %}
+</section>
+{% endblock %}

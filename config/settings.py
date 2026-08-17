@@ -93,6 +93,12 @@ DATABASES = {
 
 # --- Auth / DRF ----------------------------------------------------------------
 
+# Session login/logout: all inventory pages redirect anonymous users to the
+# inventory login (with a safe ``next`` param) and post-login users land on
+# the dashboard.
+LOGIN_URL = "inventory:login"
+LOGIN_REDIRECT_URL = "inventory:dashboard"
+
 AUTH_PASSWORD_VALIDATORS = [
     {
         "NAME": "django.contrib.auth.password_validation.UserAttributeSimilarityValidator",

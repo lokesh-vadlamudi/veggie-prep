@@ -1,0 +1,99 @@
+{% extends "base.html" %}
+
+{% block title %}Dashboard · Veggie Prep{% endblock %}
+
+{% block content %}
+<h1>Inventory{% if household.name %} · {{ household.name }}{% endif %}</h1>
+
+<section class="card add-card" aria-labelledby="fast-add-heading">
+  <h2 id="fast-add-heading">Fast add</h2>
+  <form method="post" action="{% url 'inventory:add' %}">
+    {% csrf_token %}
+    <div class="field-grid">
+      <div class="field">
+        <label for="id_product_name">Product</label>
+        {{ add_form.product_name }}
+      </div>
+      <div class="field">
+        <label for="id_quantity">Quantity</label>
+        {{ add_form.quantity }}
+      </div>
+      <div class="field">
+        <label for="id_unit">Unit</label>
+        {{ add_form.unit }}
+      </div>
+      <div class="field">
+        <label for="id_location">Location</label>
+        {{ add_form.location }}
+      </div>
+      <div class="field">
+        <label for="id_purchased_at">Purchased on <span class="optional">(optional)</span></label>
+        {{ add_form.purchased_at }}
+      </div>
+      <div class="field">
+        <label for="id_expires_on">Expires on <span class="optional">(optional)</span></label>
+        {{ add_form.expires_on }}
+      </div>
+      <div class="field field-wide">
+        <label for="id_note">Note <span class="optional">(optional)</span></label>
+        {{ add_form.note }}
+      </div>
+    </div>
+    {% include "inventory/_form_errors.html" with form=add_form %}
+    <button type="submit" class="btn btn-primary">Add to inventory</button>
+  </form>
+</section>
+
+{% if total_lots == 0 %}
+<section class="empty-panel" aria-label="No stock yet">
+  <p class="empty-state">No stock lots with a positive balance yet.
+  Use fast add above to record what you bought.</p>
+</section>
+{% else %}
+<section class="lot-groups" aria-label="Stock lots by expiry">
+  <section class="lot-group card" id="group-expired" aria-labelledby="group-expired-heading">
+    <h2 id="group-expired-heading">Expired</h2>
+    {% with group=groups.expired %}
+      {% if group %}
+      <div class="lot-list">
+        {% for item in group %}{% include "inventory/_lot_card.html" with lot=item.lot balance=item.balance %}{% endfor %}
+      </div>
+      {% else %}<p class="empty-state">Nothing here.</p>{% endif %}
+    {% endwith %}
+  </section>
+
+  <section class="lot-group card" id="group-today" aria-labelledby="group-today-heading">
+    <h2 id="group-today-heading">Today</h2>
+    {% with group=groups.today %}
+      {% if group %}
+      <div class="lot-list">
+        {% for item in group %}{% include "inventory/_lot_card.html" with lot=item.lot balance=item.balance %}{% endfor %}
+      </div>
+      {% else %}<p class="empty-state">Nothing here.</p>{% endif %}
+    {% endwith %}
+  </section>
+
+  <section class="lot-group card" id="group-next2" aria-labelledby="group-next2-heading">
+    <h2 id="group-next2-heading">Next 2 days</h2>
+    {% with group=groups.next2 %}
+      {% if group %}
+      <div class="lot-list">
+        {% for item in group %}{% include "inventory/_lot_card.html" with lot=item.lot balance=item.balance %}{% endfor %}
+      </div>
+      {% else %}<p class="empty-state">Nothing here.</p>{% endif %}
+    {% endwith %}
+  </section>
+
+  <section class="lot-group card" id="group-later" aria-labelledby="group-later-heading">
+    <h2 id="group-later-heading">Later / no date</h2>
+    {% with group=groups.later %}
+      {% if group %}
+      <div class="lot-list">
+        {% for item in group %}{% include "inventory/_lot_card.html" with lot=item.lot balance=item.balance %}{% endfor %}
+      </div>
+      {% else %}<p class="empty-state">Nothing here.</p>{% endif %}
+    {% endwith %}
+  </section>
+</section>
+{% endif %}
+{% endblock %}

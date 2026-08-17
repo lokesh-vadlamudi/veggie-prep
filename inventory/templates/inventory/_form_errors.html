@@ -1,0 +1,19 @@
+{# Field + non-field errors for the add/fast-add forms. Expects: form. #}
+{% if form.errors %}
+<div class="form-errors" role="alert">
+  {% if form.non_field_errors %}
+  <ul class="errors-non-field">
+    {% for error in form.non_field_errors %}<li>{{ error }}</li>{% endfor %}
+  </ul>
+  {% endif %}
+  {% for field in form %}
+  {% if field.errors %}
+  <ul class="errors-field errors-{{ field.html_name }}">
+    <li><strong>{{ field.label }}:</strong>
+      {% for error in field.errors %}{{ error }}{% if not forloop.last %}; {% endif %}{% endfor %}
+    </li>
+  </ul>
+  {% endif %}
+  {% endfor %}
+</div>
+{% endif %}

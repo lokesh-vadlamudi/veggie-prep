@@ -1,0 +1,50 @@
+{% extends "base.html" %}
+
+{% block title %}Add stock · Veggie Prep{% endblock %}
+
+{% block content %}
+<div class="card">
+  <h1>Add stock</h1>
+  <p class="page-intro">Record a new lot. Products are reused when the name
+  matches an existing household product (case-insensitive, whitespace ignored);
+  the unit must match the existing product’s unit.</p>
+
+  <form method="post" action="{% url 'inventory:add' %}">
+    {% csrf_token %}
+    <div class="field-grid">
+      <div class="field">
+        <label for="id_product_name">Product</label>
+        {{ form.product_name }}
+        {% if form.product_name.help_text %}<span class="hint">{{ form.product_name.help_text }}</span>{% endif %}
+      </div>
+      <div class="field">
+        <label for="id_quantity">Quantity</label>
+        {{ form.quantity }}
+        {% if form.quantity.help_text %}<span class="hint">{{ form.quantity.help_text }}</span>{% endif %}
+      </div>
+      <div class="field">
+        <label for="id_unit">Unit</label>
+        {{ form.unit }}
+      </div>
+      <div class="field">
+        <label for="id_location">Location</label>
+        {{ form.location }}
+      </div>
+      <div class="field">
+        <label for="id_purchased_at">Purchased on <span class="optional">(optional)</span></label>
+        {{ form.purchased_at }}
+      </div>
+      <div class="field">
+        <label for="id_expires_on">Expires on <span class="optional">(optional)</span></label>
+        {{ form.expires_on }}
+      </div>
+      <div class="field field-wide">
+        <label for="id_note">Note <span class="optional">(optional)</span></label>
+        {{ form.note }}
+      </div>
+    </div>
+    {% include "inventory/_form_errors.html" with form=form %}
+    <button type="submit" class="btn btn-primary">Add to inventory</button>
+  </form>
+</div>
+{% endblock %}

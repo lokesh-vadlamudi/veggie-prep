@@ -1,0 +1,16 @@
+{# One lot card inside a dashboard expiry group. Expects: lot, balance. #}
+<article class="lot card">
+  <a class="lot-name" href="{% url 'inventory:lot_detail' lot.pk %}">{{ lot.product.name }}</a>
+  <p class="lot-balance">{{ balance }} <span class="unit">{{ lot.unit }}</span></p>
+  <p class="lot-meta">
+    <span class="badge">{{ lot.location }}</span>
+    {% if lot.expires_on %}
+    <span class="lot-expiry">Expires {{ lot.expires_on|date:"Y-m-d" }}</span>
+    {% else %}
+    <span class="lot-expiry">No expiry date</span>
+    {% endif %}
+    {% if lot.purchased_at %}
+    <span class="lot-purchased">Purchased {{ lot.purchased_at|date:"Y-m-d" }}</span>
+    {% endif %}
+  </p>
+</article>
