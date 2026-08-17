@@ -546,3 +546,111 @@ class QuantityInputTests(TestCase):
 
     def test_negative_create_rejected(self):
         self.assertEqual(self._create("-2").status_code, 400)
+
+
+class CorrectBoundaryTests(TestCase):
+    """Regression: observed_balance rejects negatives, accepts zero;
+    reason is bounded to 200 chars."""
+
+    def setUp(self):
+        self.client = Client(enforce_csrf_checks=True)
+        self.user = make_user("alice")
+        login(self.client, self.user)
+
+    def _correct_post(self, payload):
+        dashboard = self.client.get(reverse("inventory:dashboard"))
+        self.assertEqual(dashboard.status_code, 200)
+        token = self.client.cookies["csrftoken"].value
+        return self.client.post(
+            reverse(LOT_CORRECT, args=[self.lot.pk]),
+            payload,
+            HTTP_X_CSRFTOKEN=token,
+        )
+
+    def test_negative_observed_balance_string_rejected_400_no_write(self):
+        self.lot = make_lot(self.user, "Apples", "5")
+        response = self._correct_post(
+            {"observed_balance": "-1", "reason": "too many"}
+        )
+        self.assertEqual(response.status_code, 400)
+        body = error_body(response)
+        self.assertEqual(body["code"], "validation_error")
+        self.assertIn("observed_balance", body["fields"])
+        self.assertEqual(self.lot.events.count(), 1)  # only the ADD
+
+    def test_negative_observed_balance_json_number_rejected_400_no_write(self):
+        self.lot = make_lot(self.user, "Apples", "5")
+        response = self.client.post(
+            reverse(LOT_CORRECT, args=[self.lot.pk]),
+            {"observed_balance": -1, "reason": "too many"},
+            content_type="application/json",
+        )
+        # Without CSRF enforcement this still validates first; use a CSRF token.
+        dashboard = self.client.get(reverse("inventory:dashboard"))
+        token = self.client.cookies["csrftoken"].value
+        response = self.client.post(
+            reverse(LOT_CORRECT, args=[self.lot.pk]),
+            b'{"observed_balance": -1, "reason": "too many"}',
+            content_type="application/json",
+            HTTP_X_CSRFTOKEN=token,
+        )
+        self.assertEqual(response.status_code, 400)
+        body = error_body(response)
+        self.assertEqual(body["code"], "validation_error")
+        self.assertIn("observed_balance", body["fields"])
+        self.assertEqual(self.lot.events.count(), 1)
+
+    def test_zero_observed_balance_accepted(self):
+        self.lot = make_lot(self.user, "Apples", "5")
+        response = self._correct_post(
+            {"observed_balance": "0", "reason": "all gone"}
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["balance"], "0.000")
+
+    def test_oversized_reason_rejected_400_no_write(self):
+        self.lot = make_lot(self.user, "Apples", "5")
+        response = self._correct_post(
+            {"observed_balance": "3", "reason": "x" * 201}
+        )
+        self.assertEqual(response.status_code, 400)
+        body = error_body(response)
+        self.assertEqual(body["code"], "validation_error")
+        self.assertIn("reason", body["fields"])
+        self.assertEqual(self.lot.events.count(), 1)  # only the ADD
+
+    def test_reason_exactly_200_accepted(self):
+        self.lot = make_lot(self.user, "Apples", "5")
+        response = self._correct_post(
+            {"observed_balance": "3", "reason": "x" * 200}
+        )
+        self.assertEqual(response.status_code, 200)
+
+
+class UnexpectedExceptionTests(TestCase):
+    """Unexpected /api/v1/ exceptions produce a generic 500 envelope
+    with no detail leak; HTML behavior is preserved."""
+
+    def test_unexpected_api_exception_returns_500_envelope(self):
+        from unittest.mock import patch
+
+        from inventory.api import views as api_views
+
+        client = Client()
+        user = make_user("alice")
+        login(client, user)
+
+        def boom(*args, **kwargs):
+            raise RuntimeError("secret internal detail")
+
+        with patch.object(
+            api_views.LotViewSet, "list", side_effect=boom
+        ):
+            response = client.get(reverse(LOTS))
+
+        self.assertEqual(response.status_code, 500)
+        body = response.json()
+        self.assertIn("error", body)
+        self.assertEqual(body["error"]["code"], "internal_error")
+        self.assertNotIn("secret internal detail", response.content.decode())
+        self.assertNotIn("RuntimeError", response.content.decode())

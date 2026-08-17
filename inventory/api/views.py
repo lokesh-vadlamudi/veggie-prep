@@ -78,7 +78,12 @@ def _api_exception_handler(exc, context):
             else:
                 fields[key] = [str(messages)]
         return error_response("validation_error", "Request validation failed.", fields)
-    return None
+    # Unexpected exception on an API path: generic 500 with no detail leak.
+    return error_response(
+        "internal_error",
+        "An unexpected error occurred.",
+        http_status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+    )
 
 
 class _LotNotFound(Exception):

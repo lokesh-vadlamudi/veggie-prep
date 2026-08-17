@@ -51,10 +51,9 @@ def _to_exact_decimal(value, label="quantity"):
 class ExactDecimalField(serializers.Field):
     """Decimal input accepting JSON numbers/strings, exact to 3 places."""
 
-    def __init__(self, label="quantity", required_positive=False, allow_zero=False, **kwargs):
+    def __init__(self, label="quantity", required_positive=False, **kwargs):
         self._label = label
         self._required_positive = required_positive
-        self._allow_zero = allow_zero
         kwargs.setdefault("required", True)
         super().__init__(**kwargs)
 
@@ -65,7 +64,7 @@ class ExactDecimalField(serializers.Field):
             raise serializers.ValidationError(str(exc))
         if self._required_positive and quantity <= 0:
             raise serializers.ValidationError(f"{self._label} must be positive.")
-        if not self._allow_zero and quantity < 0:
+        if quantity < 0:
             raise serializers.ValidationError(f"{self._label} must not be negative.")
         return quantity
 
@@ -181,5 +180,5 @@ class MutateLotCommandSerializer(serializers.Serializer):
 class CorrectLotCommandSerializer(serializers.Serializer):
     """POST /api/v1/inventory/lots/<uuid>/correct/ body."""
 
-    observed_balance = ExactDecimalField(label="observed balance", allow_zero=True)
+    observed_balance = ExactDecimalField(label="observed balance")
     reason = serializers.CharField(max_length=200, allow_blank=False)
