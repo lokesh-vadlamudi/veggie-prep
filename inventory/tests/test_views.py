@@ -461,6 +461,29 @@ class LotDetailTests(TestCase):
             "font-size: 0.9rem",
             narrow_rule,
         )
+        # The lot-detail table lives inside .history, so the base rule
+        # ".history table { min-width: 0 }" (specificity 0,1,1) would
+        # otherwise out-specify the media rule's ".history-table" (0,1,0)
+        # and leave the table squeezed at ~332px. The narrow block must
+        # therefore carry a more specific ".history .history-table"
+        # (0,2,0) selector so the 38rem minimum genuinely wins at <=600px.
+        self.assertIn(
+            ".history .history-table {",
+            narrow_block,
+            "the 600px media query must pin the effective lot-history "
+            "selector (.history .history-table) that out-specifies the "
+            "base '.history table { min-width: 0 }' rule; without it the "
+            "computed min-width stays 0 and headers split mid-word",
+        )
+        lot_narrow_rule = narrow_block.split(
+            ".history .history-table {", 1
+        )[1].split("}", 1)[0]
+        self.assertIn(
+            "min-width: 38rem",
+            lot_narrow_rule,
+            "the effective .history .history-table rule must force "
+            "min-width: 38rem at <=600px",
+        )
         header_rule = css.split(
             ".history th,\n.history-table th {", 1
         )[1].split("}", 1)[0]

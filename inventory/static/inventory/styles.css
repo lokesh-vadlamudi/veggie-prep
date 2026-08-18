@@ -445,6 +445,14 @@ input[type="number"] { min-width: 0; }
   .detail-grid dt { margin-top: 0.4rem; }
   .meal-meta { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .ingredients-table, .history-table { font-size: 0.9rem; min-width: 38rem; }
+  /* The lot-detail history table also sits inside .history, whose base rule
+     ".history table { min-width: 0 }" has higher specificity (0,1,1) than
+     the .history-table selector (0,1,0) above and would otherwise win,
+     leaving the table at 332px. ".history .history-table" (0,2,0) out-
+     specifies it so the 38rem minimum holds for lot history at <=600px,
+     while desktop stays min-width: 0 and meal-ingredients behavior is
+     unchanged. */
+  .history .history-table { font-size: 0.9rem; min-width: 38rem; }
 }
 
 /* --- Cook action (meal detail) ------------------------------------------------ */
