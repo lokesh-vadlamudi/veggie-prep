@@ -422,6 +422,15 @@ class LotDetailTests(TestCase):
         # The lot detail history table carries the shared data-table class.
         self.assertContains(response, '<table class="history-table">')
         self.assertContains(response, 'class="table-wrap"')
+        # The .table-wrap must be a keyboard-focusable scroll region, matching
+        # the meal-history scroller convention: role="region" + a concise
+        # aria-label + tabindex="0" so a keyboard-only user can focus and
+        # scroll the horizontal table without the mouse.
+        self.assertContains(
+            response,
+            '<div class="table-wrap" role="region"'
+            ' aria-label="Lot inventory event history" tabindex="0">',
+        )
 
         css = (
             Path(__file__).resolve().parents[1]
