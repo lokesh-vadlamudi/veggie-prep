@@ -63,10 +63,16 @@ class AddStockForm(forms.Form):
         initial=StockLot.Location.PANTRY,
     )
     purchased_at = forms.DateField(
-        label="Purchased on", required=False, initial=None
+        label="Purchased on",
+        required=False,
+        initial=None,
+        widget=forms.DateInput(attrs={"type": "date"}, format="%Y-%m-%d"),
     )
     expires_on = forms.DateField(
-        label="Expires on", required=False, initial=None
+        label="Expires on",
+        required=False,
+        initial=None,
+        widget=forms.DateInput(attrs={"type": "date"}, format="%Y-%m-%d"),
     )
     note = forms.CharField(label="Note", required=False, max_length=200, strip=True)
 

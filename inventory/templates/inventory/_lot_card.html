@@ -3,7 +3,7 @@
   <a class="lot-name" href="{% url 'inventory:lot_detail' lot.pk %}">{{ lot.product.name }}</a>
   <p class="lot-balance">{{ balance }} <span class="unit">{{ lot.unit }}</span></p>
   <p class="lot-meta">
-    <span class="badge">{{ lot.location }}</span>
+    <span class="badge badge-{{ lot.location }}">{{ lot.location }}</span>
     {% if lot.expires_on %}
     <span class="lot-expiry">Expires {{ lot.expires_on|date:"Y-m-d" }}</span>
     {% else %}

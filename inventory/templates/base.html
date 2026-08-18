@@ -4,26 +4,49 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{% block title %}Veggie Prep{% endblock %}</title>
-  <link rel="stylesheet" href="{% static 'inventory/styles.css' %}">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🥬</text></svg>">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600;9..144,700&family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="{% static 'inventory/styles.css' %}?v=2">
+  <script>
+    /* Apply a persisted theme before first paint to avoid a flash. */
+    (function () {
+      try {
+        var t = localStorage.getItem("vp-theme");
+        if (t === "dark" || t === "light") document.documentElement.setAttribute("data-theme", t);
+      } catch (e) {}
+    })();
+  </script>
 </head>
 <body>
 <header class="site-header">
   <div class="container header-inner">
-    <a class="brand" href="{% url 'inventory:dashboard' %}">Veggie Prep</a>
+    <a class="brand" href="{% url 'inventory:dashboard' %}"><svg class="brand-leaf" width="22" height="22" viewBox="0 0 24 24" aria-hidden="true"><path fill="#2e7d32" d="M12 2.5C7.6 6.2 4.8 10.4 4.8 14.2a7.2 7.2 0 0 0 14.4 0c0-3.8-2.8-8-7.2-11.7Z"/><path fill="none" stroke="#f5f2e9" stroke-width="1.4" stroke-linecap="round" d="M12 6v13m0-8-2.6-2.4M12 13l2.6-2.4"/></svg>Veggie Prep</a>
     <nav class="site-nav" aria-label="Main navigation">
       <a href="{% url 'inventory:dashboard' %}">Dashboard</a>
       <a href="{% url 'inventory:add' %}">Add stock</a>
       <a href="{% url 'inventory:meal_suggest' %}">Suggest meals</a>
       <a href="{% url 'inventory:meal_history' %}">Meal history</a>
+    </nav>
+    <div class="header-actions">
+      <button class="btn btn-ghost theme-toggle" id="theme-toggle" type="button" aria-label="Toggle dark mode">🌙</button>
       {% if user.is_authenticated %}
       <form class="logout-form" method="post" action="{% url 'inventory:logout' %}">
         {% csrf_token %}
         <button type="submit" class="btn btn-ghost">Log out{% if user.username %} · {{ user.username }}{% endif %}</button>
       </form>
       {% endif %}
-    </nav>
+    </div>
   </div>
 </header>
+
+<nav class="mobile-nav" aria-label="Mobile navigation">
+  <a href="{% url 'inventory:dashboard' %}"><span class="mobile-nav-icon" aria-hidden="true">🧺</span>Home</a>
+  <a href="{% url 'inventory:add' %}"><span class="mobile-nav-icon" aria-hidden="true">➕</span>Add</a>
+  <a href="{% url 'inventory:meal_suggest' %}"><span class="mobile-nav-icon" aria-hidden="true">🍳</span>Meals</a>
+  <a href="{% url 'inventory:meal_history' %}"><span class="mobile-nav-icon" aria-hidden="true">📜</span>History</a>
+</nav>
 
 {% if messages %}
 <section class="messages container" aria-live="polite">
@@ -36,5 +59,26 @@
 <main class="container" id="main">
   {% block content %}{% endblock %}
 </main>
+<script>
+  /* Theme toggle: explicit choice wins; otherwise follow the system. */
+  (function () {
+    var root = document.documentElement;
+    var btn = document.getElementById("theme-toggle");
+    if (!btn) return;
+    function systemDark() { return window.matchMedia("(prefers-color-scheme: dark)").matches; }
+    function isDark() {
+      var t = root.getAttribute("data-theme");
+      return t ? t === "dark" : systemDark();
+    }
+    function paint() { btn.textContent = isDark() ? "☀️" : "🌙"; btn.setAttribute("aria-pressed", String(isDark())); }
+    btn.addEventListener("click", function () {
+      var next = isDark() ? "light" : "dark";
+      root.setAttribute("data-theme", next);
+      try { localStorage.setItem("vp-theme", next); } catch (e) {}
+      paint();
+    });
+    paint();
+  })();
+</script>
 </body>
 </html>
