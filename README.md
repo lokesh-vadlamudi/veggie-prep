@@ -1,8 +1,7 @@
 # Veggie Prep
 
-Django + Django REST Framework backend for tracking household groceries and
-suggesting meals from what is already on hand. The API is designed to be
-consumed by future Android/iOS clients.
+Django web app plus a local-first native Android app for tracking household
+groceries and suggesting meals from what is already on hand.
 
 ## Layout
 
@@ -10,6 +9,37 @@ consumed by future Android/iOS clients.
   - `config/settings.py` — environment-driven production-shaped settings
   - `config/settings_test.py` — test settings (in-memory SQLite)
 - `requirements.txt` — runtime dependencies
+- `android/` — native Android app; pantry and meal history stay on the phone
+
+## Android app
+
+The Android app does not require an account or the Django backend. Its pantry
+uses an on-device SQLite ledger, generated meals are stored locally, cloud
+backup is disabled, and API keys are encrypted with Android Keystore.
+
+Meal generation is selectable in the app's **AI Choice** screen:
+
+- **Gemini Nano** through Android's on-device ML Kit Prompt API, when supported
+  by the phone.
+- **Imported on-device model** in `.litertlm` format, including compatible
+  Gemma models. The app tries GPU acceleration and falls back to CPU.
+- **OpenAI-compatible API**, including a local vLLM/DGX address, Tailscale IP,
+  or an HTTPS provider. Public hosts must use HTTPS; plain HTTP is accepted
+  only for private LAN, `.local`, loopback, and Tailscale addresses.
+
+No model file or API key is committed. Large on-device models are imported by
+the user and copied to the app's private storage.
+
+Build the development APK with Android Studio or:
+
+```bash
+cd android
+./gradlew testDebugUnitTest assembleDebug
+```
+
+The project targets Android 16 (API 36), has a minimum of Android 8 (API 26),
+and supports release signing exclusively through the
+`VEGGIE_PREP_KEYSTORE*` environment variables in `android/app/build.gradle.kts`.
 
 ## Setup
 

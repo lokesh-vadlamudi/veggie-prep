@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<network-security-config>
+    <!-- The app validates HTTP URLs and permits them only for private LAN,
+         loopback, .local, or Tailscale destinations. Public APIs require TLS. -->
+    <base-config cleartextTrafficPermitted="true" />
+</network-security-config>
