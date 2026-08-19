@@ -17,6 +17,20 @@ The Android app does not require an account or the Django backend. Its pantry
 uses an on-device SQLite ledger, generated meals are stored locally, cloud
 backup is disabled, and API keys are encrypted with Android Keystore.
 
+The current Android feature set includes:
+
+- an offline catalog of 100+ commonly used Indian ingredients with visual
+  tiles, regional aliases, storage defaults, and suggested shelf life;
+- expiry-first meal planning that excludes expired food and requires the
+  earliest-expiring safe item in every saved suggestion;
+- deterministic reconciliation of model quantities against real pantry lots;
+- a consolidated shopping list for ingredients a meal still needs; and
+- atomic **Cook & deduct** confirmation that rechecks and consumes the matched
+  pantry quantities before marking a meal cooked.
+
+See the live Android 16 emulator walkthrough in the
+[Android screenshot gallery](docs/screenshots/android/README.md).
+
 Meal generation is selectable in the app's **AI Choice** screen:
 
 - **Gemini Nano** through Android's on-device ML Kit Prompt API, when supported
@@ -34,7 +48,7 @@ Build the development APK with Android Studio or:
 
 ```bash
 cd android
-./gradlew testDebugUnitTest assembleDebug
+./gradlew testDebugUnitTest lintDebug assembleDebug connectedDebugAndroidTest
 ```
 
 The project targets Android 16 (API 36), has a minimum of Android 8 (API 26),

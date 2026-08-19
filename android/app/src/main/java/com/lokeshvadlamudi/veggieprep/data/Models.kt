@@ -19,6 +19,20 @@ data class MealIngredient(
     val quantityMilli: Long,
 )
 
+data class MealAllocation(
+    val lotId: Long,
+    val name: String,
+    val unit: String,
+    val quantityMilli: Long,
+    val expiresOn: String?,
+    val rescued: Boolean,
+)
+
+enum class MealStatus {
+    SUGGESTED,
+    COOKED,
+}
+
 data class MealProposal(
     val id: Long = 0,
     val title: String,
@@ -30,8 +44,23 @@ data class MealProposal(
     val rationale: String,
     val ingredients: List<MealIngredient>,
     val provider: String,
+    val allocations: List<MealAllocation> = emptyList(),
+    val missingIngredients: List<MealIngredient> = emptyList(),
+    val status: MealStatus = MealStatus.SUGGESTED,
+    val cookedAt: Long? = null,
     val createdAt: Long = System.currentTimeMillis(),
 )
+
+data class ShoppingItem(
+    val id: Long,
+    val name: String,
+    val quantityMilli: Long,
+    val unit: String,
+    val checked: Boolean,
+) {
+    val quantityText: String
+        get() = formatMilli(quantityMilli)
+}
 
 enum class AiProviderType {
     REMOTE_OPENAI,

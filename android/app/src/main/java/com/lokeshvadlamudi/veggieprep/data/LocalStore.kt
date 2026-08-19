@@ -8,7 +8,10 @@ import com.google.gson.Gson
 import com.google.gson.reflect.TypeToken
 import java.util.UUID
 
-class LocalStore(context: Context) : SQLiteOpenHelper(context, "veggie_prep.db", null, 1) {
+class LocalStore(
+    context: Context,
+    databaseName: String = "veggie_prep.db",
+) : SQLiteOpenHelper(context, databaseName, null, 2) {
     private val gson = Gson()
 
     override fun onCreate(db: SQLiteDatabase) {
@@ -51,10 +54,15 @@ class LocalStore(context: Context) : SQLiteOpenHelper(context, "veggie_prep.db",
                 rationale TEXT NOT NULL,
                 ingredients_json TEXT NOT NULL,
                 provider TEXT NOT NULL,
+                allocations_json TEXT NOT NULL DEFAULT '[]',
+                missing_json TEXT NOT NULL DEFAULT '[]',
+                status TEXT NOT NULL DEFAULT 'suggested',
+                cooked_at INTEGER,
                 created_at INTEGER NOT NULL
             )
             """.trimIndent(),
         )
+        createShoppingTable(db)
         db.execSQL("CREATE INDEX inventory_events_lot ON inventory_events(lot_id, created_at)")
         db.execSQL("CREATE INDEX stock_lots_expiry ON stock_lots(expires_on)")
     }
@@ -64,7 +72,15 @@ class LocalStore(context: Context) : SQLiteOpenHelper(context, "veggie_prep.db",
         db.setForeignKeyConstraintsEnabled(true)
     }
 
-    override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) = Unit
+    override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
+        if (oldVersion < 2) {
+            db.execSQL("ALTER TABLE meals ADD COLUMN allocations_json TEXT NOT NULL DEFAULT '[]'")
+            db.execSQL("ALTER TABLE meals ADD COLUMN missing_json TEXT NOT NULL DEFAULT '[]'")
+            db.execSQL("ALTER TABLE meals ADD COLUMN status TEXT NOT NULL DEFAULT 'suggested'")
+            db.execSQL("ALTER TABLE meals ADD COLUMN cooked_at INTEGER")
+            createShoppingTable(db)
+        }
+    }
 
     fun addLot(
         name: String,
@@ -149,6 +165,10 @@ class LocalStore(context: Context) : SQLiteOpenHelper(context, "veggie_prep.db",
             put("rationale", meal.rationale)
             put("ingredients_json", gson.toJson(meal.ingredients))
             put("provider", meal.provider)
+            put("allocations_json", gson.toJson(meal.allocations))
+            put("missing_json", gson.toJson(meal.missingIngredients))
+            put("status", meal.status.name.lowercase())
+            meal.cookedAt?.let { put("cooked_at", it) }
             put("created_at", meal.createdAt)
         },
     )
@@ -164,6 +184,7 @@ class LocalStore(context: Context) : SQLiteOpenHelper(context, "veggie_prep.db",
     ).use { cursor ->
         val stringListType = object : TypeToken<List<String>>() {}.type
         val ingredientType = object : TypeToken<List<MealIngredient>>() {}.type
+        val allocationType = object : TypeToken<List<MealAllocation>>() {}.type
         buildList {
             while (cursor.moveToNext()) {
                 add(
@@ -178,11 +199,138 @@ class LocalStore(context: Context) : SQLiteOpenHelper(context, "veggie_prep.db",
                         rationale = cursor.getString(cursor.getColumnIndexOrThrow("rationale")),
                         ingredients = gson.fromJson(cursor.getString(cursor.getColumnIndexOrThrow("ingredients_json")), ingredientType),
                         provider = cursor.getString(cursor.getColumnIndexOrThrow("provider")),
+                        allocations = gson.fromJson(cursor.getString(cursor.getColumnIndexOrThrow("allocations_json")), allocationType),
+                        missingIngredients = gson.fromJson(cursor.getString(cursor.getColumnIndexOrThrow("missing_json")), ingredientType),
+                        status = MealStatus.valueOf(cursor.getString(cursor.getColumnIndexOrThrow("status")).uppercase()),
+                        cookedAt = cursor.getLongOrNull(cursor.getColumnIndexOrThrow("cooked_at")),
                         createdAt = cursor.getLong(cursor.getColumnIndexOrThrow("created_at")),
                     ),
                 )
             }
         }
+    }
+
+    fun cookMeal(mealId: Long) {
+        writableDatabase.inTransaction {
+            val meal = rawQuery(
+                "SELECT title, status, allocations_json FROM meals WHERE id = ?",
+                arrayOf(mealId.toString()),
+            ).use { cursor ->
+                require(cursor.moveToFirst()) { "That meal is no longer available." }
+                Triple(cursor.getString(0), cursor.getString(1), cursor.getString(2))
+            }
+            require(meal.second == "suggested") { "That meal was already cooked." }
+            val allocationType = object : TypeToken<List<MealAllocation>>() {}.type
+            val allocations: List<MealAllocation> = gson.fromJson(meal.third, allocationType)
+            require(allocations.isNotEmpty()) { "This older suggestion has no pantry allocation to deduct." }
+            val byLot = allocations.groupBy { it.lotId }.mapValues { (_, values) ->
+                values.first() to values.sumOf { it.quantityMilli }
+            }
+            byLot.forEach { (lotId, value) ->
+                require(balanceFor(this, lotId) >= value.second) {
+                    "Pantry quantities changed. Generate a fresh meal before cooking."
+                }
+            }
+            val now = System.currentTimeMillis()
+            byLot.forEach { (lotId, value) ->
+                insertEvent(this, lotId, "CONSUME", -value.second, "Cooked: ${meal.first}", now)
+            }
+            update(
+                "meals",
+                ContentValues().apply {
+                    put("status", "cooked")
+                    put("cooked_at", now)
+                },
+                "id = ?",
+                arrayOf(mealId.toString()),
+            )
+        }
+    }
+
+    fun addShoppingItems(items: List<MealIngredient>) {
+        writableDatabase.inTransaction {
+            items.forEach { item ->
+                val existing = rawQuery(
+                    "SELECT id, quantity_milli FROM shopping_items WHERE lower(name) = lower(?) AND unit = ? AND checked = 0 ORDER BY id LIMIT 1",
+                    arrayOf(item.name, item.unit),
+                ).use { cursor ->
+                    if (cursor.moveToFirst()) cursor.getLong(0) to cursor.getLong(1) else null
+                }
+                if (existing == null) {
+                    insertOrThrow(
+                        "shopping_items",
+                        null,
+                        ContentValues().apply {
+                            put("name", item.name)
+                            put("quantity_milli", item.quantityMilli)
+                            put("unit", item.unit)
+                            put("checked", 0)
+                            put("created_at", System.currentTimeMillis())
+                        },
+                    )
+                } else {
+                    update(
+                        "shopping_items",
+                        ContentValues().apply { put("quantity_milli", Math.addExact(existing.second, item.quantityMilli)) },
+                        "id = ?",
+                        arrayOf(existing.first.toString()),
+                    )
+                }
+            }
+        }
+    }
+
+    fun listShopping(): List<ShoppingItem> = readableDatabase.query(
+        "shopping_items",
+        null,
+        null,
+        null,
+        null,
+        null,
+        "checked ASC, created_at DESC",
+    ).use { cursor ->
+        buildList {
+            while (cursor.moveToNext()) {
+                add(
+                    ShoppingItem(
+                        id = cursor.getLong(cursor.getColumnIndexOrThrow("id")),
+                        name = cursor.getString(cursor.getColumnIndexOrThrow("name")),
+                        quantityMilli = cursor.getLong(cursor.getColumnIndexOrThrow("quantity_milli")),
+                        unit = cursor.getString(cursor.getColumnIndexOrThrow("unit")),
+                        checked = cursor.getInt(cursor.getColumnIndexOrThrow("checked")) != 0,
+                    ),
+                )
+            }
+        }
+    }
+
+    fun setShoppingChecked(itemId: Long, checked: Boolean) {
+        writableDatabase.update(
+            "shopping_items",
+            ContentValues().apply { put("checked", if (checked) 1 else 0) },
+            "id = ?",
+            arrayOf(itemId.toString()),
+        )
+    }
+
+    fun clearCheckedShopping() {
+        writableDatabase.delete("shopping_items", "checked = 1", null)
+    }
+
+    private fun createShoppingTable(db: SQLiteDatabase) {
+        db.execSQL(
+            """
+            CREATE TABLE IF NOT EXISTS shopping_items (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL,
+                quantity_milli INTEGER NOT NULL CHECK(quantity_milli > 0),
+                unit TEXT NOT NULL,
+                checked INTEGER NOT NULL DEFAULT 0,
+                created_at INTEGER NOT NULL
+            )
+            """.trimIndent(),
+        )
+        db.execSQL("CREATE INDEX IF NOT EXISTS shopping_items_checked ON shopping_items(checked, created_at)")
     }
 
     private fun insertEvent(
@@ -229,3 +377,6 @@ private inline fun <T> SQLiteDatabase.inTransaction(block: SQLiteDatabase.() -> 
 
 private fun android.database.Cursor.getStringOrNull(index: Int): String? =
     if (isNull(index)) null else getString(index)
+
+private fun android.database.Cursor.getLongOrNull(index: Int): Long? =
+    if (isNull(index)) null else getLong(index)

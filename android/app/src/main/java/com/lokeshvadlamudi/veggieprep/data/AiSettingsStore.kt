@@ -43,6 +43,24 @@ class AiSettingsStore(private val context: Context) {
 
     fun apiKey(): String = secrets.getString("api_key", null)?.let(::decrypt).orEmpty()
 
+    fun isNetworkDisclosureRemembered(baseUrl: String): Boolean {
+        val normalized = baseUrl.trim().trimEnd('/')
+        return normalized.isNotEmpty() &&
+            preferences.getString(NETWORK_DISCLOSURE_BASE_URL, null) == normalized
+    }
+
+    fun rememberNetworkDisclosure(baseUrl: String) {
+        val normalized = baseUrl.trim().trimEnd('/')
+        require(normalized.isNotEmpty()) { "Enter an API address before saving this choice." }
+        preferences.edit().putString(NETWORK_DISCLOSURE_BASE_URL, normalized).apply()
+    }
+
+    fun forgetNetworkDisclosure(baseUrl: String) {
+        if (isNetworkDisclosureRemembered(baseUrl)) {
+            preferences.edit().remove(NETWORK_DISCLOSURE_BASE_URL).apply()
+        }
+    }
+
     private fun key(): SecretKey {
         val keyStore = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
         (keyStore.getKey(KEY_ALIAS, null) as? SecretKey)?.let { return it }
@@ -78,5 +96,6 @@ class AiSettingsStore(private val context: Context) {
     companion object {
         private const val KEY_ALIAS = "veggie_prep_ai_key"
         private const val TRANSFORMATION = "AES/GCM/NoPadding"
+        private const val NETWORK_DISCLOSURE_BASE_URL = "network_disclosure_base_url"
     }
 }

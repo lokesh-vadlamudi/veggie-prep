@@ -25,17 +25,7 @@ class RemoteOpenAiMealAi(
     override val label: String = model
 
     override suspend fun generate(prompt: String): String = withContext(Dispatchers.IO) {
-        val body = JsonObject().apply {
-            addProperty("model", model)
-            addProperty("temperature", 0.25)
-            addProperty("max_tokens", 1800)
-            add("messages", JsonArray().apply {
-                add(JsonObject().apply {
-                    addProperty("role", "user")
-                    addProperty("content", prompt)
-                })
-            })
-        }.toString()
+        val body = createRemoteRequestBody(model, prompt).toString()
 
         val connection = (URL("$baseUrl/chat/completions").openConnection() as HttpURLConnection).apply {
             requestMethod = "POST"
@@ -65,6 +55,73 @@ class RemoteOpenAiMealAi(
         }
     }
 }
+
+internal fun createRemoteRequestBody(model: String, prompt: String): JsonObject = JsonObject().apply {
+    val isQwen = model.contains("qwen", ignoreCase = true)
+    addProperty("model", model)
+    addProperty("temperature", 0.25)
+    addProperty("max_tokens", 1800)
+    add("messages", JsonArray().apply {
+        add(JsonObject().apply {
+            addProperty("role", "user")
+            addProperty("content", prompt)
+        })
+    })
+    if (isQwen) {
+        add("chat_template_kwargs", JsonObject().apply {
+            addProperty("enable_thinking", false)
+        })
+        add("response_format", JsonParser.parseString(QWEN_MEAL_RESPONSE_FORMAT).asJsonObject)
+    }
+}
+
+private val QWEN_MEAL_RESPONSE_FORMAT = """
+    {
+      "type": "json_schema",
+      "json_schema": {
+        "name": "meal_proposal",
+        "strict": true,
+        "schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["title", "servings", "time_minutes", "steps", "substitutions", "safety_note", "rationale", "ingredients"],
+          "properties": {
+            "title": {"type": "string", "maxLength": 160},
+            "servings": {"type": "integer", "minimum": 1, "maximum": 20},
+            "time_minutes": {"type": "integer", "minimum": 1, "maximum": 360},
+            "steps": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 15,
+              "items": {"type": "string", "maxLength": 500}
+            },
+            "substitutions": {
+              "type": "array",
+              "maxItems": 8,
+              "items": {"type": "string", "maxLength": 300}
+            },
+            "safety_note": {"type": "string", "maxLength": 500},
+            "rationale": {"type": "string", "maxLength": 600},
+            "ingredients": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 40,
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["name", "unit", "quantity"],
+                "properties": {
+                  "name": {"type": "string", "maxLength": 200},
+                  "unit": {"type": "string", "enum": ["count", "each", "g", "kg", "ml", "l"]},
+                  "quantity": {"type": "string", "pattern": "^[0-9]+([.][0-9]{1,3})?$"}
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+""".trimIndent()
 
 fun validateAndNormalizeEndpoint(value: String): String {
     val trimmed = value.trim().trimEnd('/')

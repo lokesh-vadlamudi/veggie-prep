@@ -21,19 +21,21 @@ object MealPrompt {
         servings: Int,
         maxMinutes: Int,
         preference: String,
+        requiredItem: PantryItem? = MealPlanningPolicy.requiredExpiryItem(pantry),
     ): String {
-        val inventory = pantry.map {
+        val inventory = MealPlanningPolicy.eligiblePantry(pantry).map {
             mapOf(
                 "name" to it.name,
                 "quantity" to it.quantityText,
                 "unit" to it.unit,
-                "location" to it.location,
                 "expires_on" to it.expiresOn,
             )
         }
         return """
             You are a practical meal planner. Plan one meal using this pantry.
-            Prefer ingredients expiring soon. Never claim an ingredient is present unless it is listed.
+            ${requiredItem?.let { "You MUST use ${it.name}, the earliest-expiring safe item." } ?: "Prefer dated ingredients before undated ingredients."}
+            Never claim an ingredient is present unless it is listed. You may include missing staples, but they must appear in ingredients.
+            Do not exceed the listed pantry quantities. Expired items have already been excluded.
             Return exactly one JSON object, without Markdown or commentary, using this schema:
             {
               "title": "short dish name",
