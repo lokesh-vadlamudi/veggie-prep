@@ -71,6 +71,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         location: String,
         purchasedOn: String,
         expiresOn: String,
+        category: String,
     ) {
         val quantity = com.lokeshvadlamudi.veggieprep.data.parseMilli(quantityText)
         if (name.isBlank() || quantity == null || quantity <= 0) {
@@ -83,7 +84,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
         viewModelScope.launch(Dispatchers.IO) {
             runCatching {
-                database.addLot(name, quantity, unit, location, purchasedOn, expiresOn)
+                database.addLot(name, quantity, unit, location, purchasedOn, expiresOn, category)
                 database.listPantry()
             }.onSuccess { pantry ->
                 mutableState.value = mutableState.value.copy(pantry = pantry, error = null)
@@ -108,6 +109,26 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 database.listPantry()
             }.onSuccess { pantry ->
                 mutableState.value = mutableState.value.copy(pantry = pantry, error = null)
+            }.onFailure { showError(it.safeMessage()) }
+        }
+    }
+
+    fun updateExpiry(item: PantryItem, expiresOn: String) {
+        val normalized = expiresOn.trim()
+        if (normalized.isNotEmpty() && runCatching { LocalDate.parse(normalized) }.isFailure) {
+            showError("Enter the expiry date as YYYY-MM-DD, or clear it.")
+            return
+        }
+        viewModelScope.launch(Dispatchers.IO) {
+            runCatching {
+                database.updateLotExpiry(item.id, normalized)
+                database.listPantry()
+            }.onSuccess { pantry ->
+                mutableState.value = mutableState.value.copy(
+                    pantry = pantry,
+                    status = if (normalized.isEmpty()) "Expiry removed" else "Expiry updated",
+                    error = null,
+                )
             }.onFailure { showError(it.safeMessage()) }
         }
     }

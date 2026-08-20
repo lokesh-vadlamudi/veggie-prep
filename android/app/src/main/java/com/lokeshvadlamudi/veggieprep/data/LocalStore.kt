@@ -11,7 +11,7 @@ import java.util.UUID
 class LocalStore(
     context: Context,
     databaseName: String = "veggie_prep.db",
-) : SQLiteOpenHelper(context, databaseName, null, 2) {
+) : SQLiteOpenHelper(context, databaseName, null, 3) {
     private val gson = Gson()
 
     override fun onCreate(db: SQLiteDatabase) {
@@ -23,6 +23,7 @@ class LocalStore(
                 purchase_quantity_milli INTEGER NOT NULL CHECK(purchase_quantity_milli > 0),
                 unit TEXT NOT NULL,
                 location TEXT NOT NULL,
+                category TEXT NOT NULL DEFAULT 'Other',
                 purchased_on TEXT,
                 expires_on TEXT,
                 created_at INTEGER NOT NULL
@@ -80,6 +81,9 @@ class LocalStore(
             db.execSQL("ALTER TABLE meals ADD COLUMN cooked_at INTEGER")
             createShoppingTable(db)
         }
+        if (oldVersion < 3) {
+            db.execSQL("ALTER TABLE stock_lots ADD COLUMN category TEXT NOT NULL DEFAULT 'Other'")
+        }
     }
 
     fun addLot(
@@ -89,6 +93,7 @@ class LocalStore(
         location: String,
         purchasedOn: String?,
         expiresOn: String?,
+        category: String = "Other",
     ): Long = writableDatabase.inTransaction {
         val now = System.currentTimeMillis()
         val lotId = insertOrThrow(
@@ -99,6 +104,7 @@ class LocalStore(
                 put("purchase_quantity_milli", quantityMilli)
                 put("unit", unit)
                 put("location", location)
+                put("category", category.ifBlank { "Other" })
                 put("purchased_on", purchasedOn?.takeIf(String::isNotBlank))
                 put("expires_on", expiresOn?.takeIf(String::isNotBlank))
                 put("created_at", now)
@@ -122,9 +128,22 @@ class LocalStore(
         }
     }
 
+    fun updateLotExpiry(lotId: Long, expiresOn: String?) {
+        val updated = writableDatabase.update(
+            "stock_lots",
+            ContentValues().apply {
+                val normalized = expiresOn?.trim().orEmpty()
+                if (normalized.isEmpty()) putNull("expires_on") else put("expires_on", normalized)
+            },
+            "id = ?",
+            arrayOf(lotId.toString()),
+        )
+        require(updated == 1) { "That pantry item is no longer available." }
+    }
+
     fun listPantry(): List<PantryItem> {
         val sql = """
-            SELECT l.id, l.name, l.unit, l.location, l.purchased_on, l.expires_on,
+            SELECT l.id, l.name, l.unit, l.location, l.category, l.purchased_on, l.expires_on,
                    COALESCE(SUM(e.quantity_milli), 0) AS balance
             FROM stock_lots l
             LEFT JOIN inventory_events e ON e.lot_id = l.id
@@ -142,9 +161,10 @@ class LocalStore(
                             name = cursor.getString(1),
                             unit = cursor.getString(2),
                             location = cursor.getString(3),
-                            purchasedOn = cursor.getStringOrNull(4),
-                            expiresOn = cursor.getStringOrNull(5),
-                            quantityMilli = cursor.getLong(6),
+                            category = cursor.getString(4),
+                            purchasedOn = cursor.getStringOrNull(5),
+                            expiresOn = cursor.getStringOrNull(6),
+                            quantityMilli = cursor.getLong(7),
                         ),
                     )
                 }

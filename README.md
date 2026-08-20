@@ -19,8 +19,11 @@ backup is disabled, and API keys are encrypted with Android Keystore.
 
 The current Android feature set includes:
 
-- an offline catalog of 100+ commonly used Indian ingredients with visual
-  tiles, regional aliases, storage defaults, and suggested shelf life;
+- an offline catalog of 450+ household foods with visual tiles, breads and
+  flatbreads, eggs and proteins, global and Indian regional aliases, storage
+  defaults, and suggested shelf life;
+- editable pantry expiry dates, including the ability to clear an unknown date;
+- a dedicated Snacks section backed by the same local pantry inventory;
 - expiry-first meal planning that excludes expired food and requires the
   earliest-expiring safe item in every saved suggestion;
 - deterministic reconciliation of model quantities against real pantry lots;

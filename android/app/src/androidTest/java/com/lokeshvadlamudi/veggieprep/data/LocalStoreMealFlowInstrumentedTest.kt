@@ -28,6 +28,8 @@ class LocalStoreMealFlowInstrumentedTest {
 
     @Test fun cookingDeductsAtomicallyAndShoppingCombinesMissingQuantities() {
         val lotId = store.addLot("Spinach", 200_000, "g", "fridge", "2026-08-19", "2026-08-20")
+        store.updateLotExpiry(lotId, "2026-08-21")
+        assertEquals("2026-08-21", store.listPantry().single().expiresOn)
         val missingOil = MealIngredient("Cooking oil", "ml", 10_000)
         val mealId = store.saveMeal(
             MealProposal(
@@ -57,5 +59,23 @@ class LocalStoreMealFlowInstrumentedTest {
         assertTrue(store.listShopping().single().checked)
         store.clearCheckedShopping()
         assertTrue(store.listShopping().isEmpty())
+    }
+
+    @Test fun storesSnackCategoryAndAllowsExpiryToBeChangedOrCleared() {
+        val lotId = store.addLot(
+            name = "Potato chips",
+            quantityMilli = 200_000,
+            unit = "g",
+            location = "pantry",
+            purchasedOn = "2026-08-19",
+            expiresOn = "2026-09-01",
+            category = "Snacks",
+        )
+
+        assertEquals("Snacks", store.listPantry().single().category)
+        store.updateLotExpiry(lotId, "2026-09-15")
+        assertEquals("2026-09-15", store.listPantry().single().expiresOn)
+        store.updateLotExpiry(lotId, "")
+        assertEquals(null, store.listPantry().single().expiresOn)
     }
 }

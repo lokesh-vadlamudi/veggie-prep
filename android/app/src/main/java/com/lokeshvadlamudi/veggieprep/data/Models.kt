@@ -8,6 +8,7 @@ data class PantryItem(
     val location: String,
     val purchasedOn: String?,
     val expiresOn: String?,
+    val category: String = "Other",
 ) {
     val quantityText: String
         get() = formatMilli(quantityMilli)

@@ -94,6 +94,7 @@ class MainActivity : ComponentActivity() {
 
 private enum class AppSection(val label: String) {
     PANTRY("Pantry"),
+    SNACKS("Snacks"),
     MEALS("Meals"),
     SHOPPING("Shopping"),
     AI("AI Choice"),
@@ -142,6 +143,12 @@ private fun VeggiePrepApp(viewModel: MainViewModel) {
                     label = { Text("Pantry") },
                 )
                 NavigationBarItem(
+                    selected = section == AppSection.SNACKS,
+                    onClick = { section = AppSection.SNACKS },
+                    icon = { Text("🍿", style = MaterialTheme.typography.titleLarge) },
+                    label = { Text("Snacks") },
+                )
+                NavigationBarItem(
                     selected = section == AppSection.MEALS,
                     onClick = { section = AppSection.MEALS },
                     icon = { Icon(Icons.Default.AutoAwesome, null) },
@@ -170,7 +177,23 @@ private fun VeggiePrepApp(viewModel: MainViewModel) {
     ) { padding ->
         Box(Modifier.fillMaxSize().padding(padding)) {
             when (section) {
-                AppSection.PANTRY -> PantryScreen(state.pantry, viewModel::addItem, viewModel::useItem)
+                AppSection.PANTRY -> PantryScreen(
+                    pantry = state.pantry,
+                    onAdd = viewModel::addItem,
+                    onUse = viewModel::useItem,
+                    onUpdateExpiry = viewModel::updateExpiry,
+                )
+                AppSection.SNACKS -> PantryScreen(
+                    pantry = state.pantry.filter { IndianIngredientCatalog.isSnack(it.name, it.category) },
+                    onAdd = viewModel::addItem,
+                    onUse = viewModel::useItem,
+                    onUpdateExpiry = viewModel::updateExpiry,
+                    heading = "Available snacks",
+                    emptyTitle = "No snacks yet",
+                    emptyDetail = "Add chips, biscuits, namkeen, sweets, bakery items, or any custom snack.",
+                    emptyButton = "Add a snack",
+                    snacksOnly = true,
+                )
                 AppSection.MEALS -> MealsScreen(
                     state = state,
                     onGenerate = viewModel::generateMeal,
@@ -195,19 +218,26 @@ private fun VeggiePrepApp(viewModel: MainViewModel) {
 @Composable
 private fun PantryScreen(
     pantry: List<PantryItem>,
-    onAdd: (String, String, String, String, String, String) -> Unit,
+    onAdd: (String, String, String, String, String, String, String) -> Unit,
     onUse: (PantryItem, String, Boolean) -> Unit,
+    onUpdateExpiry: (PantryItem, String) -> Unit,
+    heading: String = "Use soon",
+    emptyTitle: String = "Your pantry lives on this phone",
+    emptyDetail: String = "Add vegetables and staples. No account or server is needed.",
+    emptyButton: String = "Add first item",
+    snacksOnly: Boolean = false,
 ) {
     var showAdd by rememberSaveable { mutableStateOf(false) }
     var actionItem by remember { mutableStateOf<PantryItem?>(null) }
+    var expiryItem by remember { mutableStateOf<PantryItem?>(null) }
     var discard by remember { mutableStateOf(false) }
 
     Box(Modifier.fillMaxSize()) {
         if (pantry.isEmpty()) {
             EmptyState(
-                title = "Your pantry lives on this phone",
-                detail = "Add vegetables and staples. No account or server is needed.",
-                button = "Add first item",
+                title = emptyTitle,
+                detail = emptyDetail,
+                button = emptyButton,
                 onClick = { showAdd = true },
             )
         } else {
@@ -216,11 +246,12 @@ private fun PantryScreen(
                 contentPadding = androidx.compose.foundation.layout.PaddingValues(16.dp, 12.dp, 16.dp, 96.dp),
                 verticalArrangement = Arrangement.spacedBy(10.dp),
             ) {
-                item { Text("Use soon", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold) }
+                item { Text(heading, style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold) }
                 items(pantry, key = { it.id }) { item ->
                     PantryCard(
                         item = item,
                         onUse = { actionItem = item; discard = false },
+                        onEditExpiry = { expiryItem = item },
                         onDiscard = { actionItem = item; discard = true },
                     )
                 }
@@ -234,8 +265,8 @@ private fun PantryScreen(
         ) { Text("+", style = MaterialTheme.typography.headlineMedium) }
     }
 
-    if (showAdd) QuickAddDialog(onDismiss = { showAdd = false }) { name, quantity, unit, location, purchased, expires ->
-        onAdd(name, quantity, unit, location, purchased, expires)
+    if (showAdd) QuickAddDialog(snacksOnly = snacksOnly, onDismiss = { showAdd = false }) { name, quantity, unit, location, purchased, expires, category ->
+        onAdd(name, quantity, unit, location, purchased, expires, category)
         showAdd = false
     }
     actionItem?.let { item ->
@@ -246,10 +277,17 @@ private fun PantryScreen(
             onConfirm = { quantity -> onUse(item, quantity, discard); actionItem = null },
         )
     }
+    expiryItem?.let { item ->
+        ExpiryDialog(
+            item = item,
+            onDismiss = { expiryItem = null },
+            onConfirm = { expiry -> onUpdateExpiry(item, expiry); expiryItem = null },
+        )
+    }
 }
 
 @Composable
-private fun PantryCard(item: PantryItem, onUse: () -> Unit, onDiscard: () -> Unit) {
+private fun PantryCard(item: PantryItem, onUse: () -> Unit, onEditExpiry: () -> Unit, onDiscard: () -> Unit) {
     Card(colors = CardDefaults.cardColors(containerColor = Color.White), shape = RoundedCornerShape(18.dp)) {
         Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
@@ -265,6 +303,7 @@ private fun PantryCard(item: PantryItem, onUse: () -> Unit, onDiscard: () -> Uni
             }, color = Muted)
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Button(onClick = onUse) { Text("Use") }
+                TextButton(onClick = onEditExpiry) { Text("Edit expiry") }
                 TextButton(onClick = onDiscard) { Text("Discard", color = Danger) }
             }
         }
@@ -273,8 +312,9 @@ private fun PantryCard(item: PantryItem, onUse: () -> Unit, onDiscard: () -> Uni
 
 @Composable
 private fun QuickAddDialog(
+    snacksOnly: Boolean,
     onDismiss: () -> Unit,
-    onConfirm: (String, String, String, String, String, String) -> Unit,
+    onConfirm: (String, String, String, String, String, String, String) -> Unit,
 ) {
     var query by rememberSaveable { mutableStateOf("") }
     var selected by remember { mutableStateOf<CatalogIngredient?>(null) }
@@ -298,23 +338,28 @@ private fun QuickAddDialog(
 
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text(if (editingDetails) "Add ${selected?.name ?: "custom item"}" else "Quick add Indian ingredients") },
+        title = { Text(if (editingDetails) "Add ${selected?.name ?: "custom item"}" else if (snacksOnly) "Add a snack" else "Quick add food") },
         text = {
             if (!editingDetails) {
                 Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                     OutlinedTextField(
                         query,
                         { query = it },
-                        label = { Text("Search spinach, palak, keerai…") },
+                        label = { Text(if (snacksOnly) "Search chips, biscuits, namkeen…" else "Search eggs, sourdough, roti, palak…") },
                         modifier = Modifier.fillMaxWidth(),
                         singleLine = true,
                     )
-                    Text("Works offline • regional aliases included", color = Muted, style = MaterialTheme.typography.bodySmall)
+                    Text("Works offline • broad food types and regional aliases", color = Muted, style = MaterialTheme.typography.bodySmall)
                     LazyColumn(
                         modifier = Modifier.heightIn(max = 460.dp),
                         verticalArrangement = Arrangement.spacedBy(6.dp),
                     ) {
-                        items(IndianIngredientCatalog.search(query).take(30), key = { it.id }) { ingredient ->
+                        items(
+                            IndianIngredientCatalog.search(query)
+                                .filter { !snacksOnly || IndianIngredientCatalog.isSnackCategory(it.category) }
+                                .take(30),
+                            key = { it.id },
+                        ) { ingredient ->
                             Card(
                                 onClick = { choose(ingredient) },
                                 colors = CardDefaults.cardColors(containerColor = PaleGreen),
@@ -393,7 +438,10 @@ private fun QuickAddDialog(
         confirmButton = {
             if (editingDetails) {
                 Button(
-                    onClick = { onConfirm(name, quantity, unit, location, LocalDate.now().toString(), expires) },
+                    onClick = {
+                        val category = selected?.category ?: if (snacksOnly) "Snacks" else "Other"
+                        onConfirm(name, quantity, unit, location, LocalDate.now().toString(), expires, category)
+                    },
                     enabled = name.isNotBlank() && quantity.isNotBlank(),
                 ) { Text("Add") }
             }
@@ -445,6 +493,32 @@ private fun QuantityDialog(item: PantryItem, discard: Boolean, onDismiss: () -> 
             )
         },
         confirmButton = { Button(onClick = { onConfirm(quantity) }) { Text(if (discard) "Discard" else "Use") } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+    )
+}
+
+@Composable
+private fun ExpiryDialog(item: PantryItem, onDismiss: () -> Unit, onConfirm: (String) -> Unit) {
+    var expires by rememberSaveable(item.id) { mutableStateOf(item.expiresOn.orEmpty()) }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Edit ${item.name} expiry") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedTextField(
+                    value = expires,
+                    onValueChange = { expires = it },
+                    label = { Text("Expiry date (YYYY-MM-DD)") },
+                    supportingText = { Text("Change the date, or clear it if this item has no known expiry.") },
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true,
+                )
+                if (expires.isNotBlank()) {
+                    TextButton(onClick = { expires = "" }) { Text("Clear expiry") }
+                }
+            }
+        },
+        confirmButton = { Button(onClick = { onConfirm(expires) }) { Text("Save") } },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
     )
 }

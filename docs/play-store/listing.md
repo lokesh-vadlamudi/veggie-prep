@@ -14,10 +14,11 @@ Veggie Prep helps you keep track of vegetables, groceries, and pantry staples
 without creating an account. Add what you have, record what was used or
 discarded, and see which ingredients should be used soon.
 
-Quickly find commonly used Indian ingredients with regional names such as
-palak, methi, keerai, and kothimeera. The built-in catalog works offline and
-prefills practical storage, quantity, and shelf-life suggestions that you can
-edit before saving.
+Quickly find more than 450 household foods—from eggs, sourdough, roti, pasta,
+produce, sauces, frozen foods, and leftovers to Indian ingredients with names
+such as palak, methi, keerai, and kothimeera. The built-in catalog works
+offline and prefills practical storage, quantity, and shelf-life suggestions
+that you can edit before or after saving.
 
 Turn your current pantry into a meal suggestion with your choice of AI:
 
@@ -34,7 +35,9 @@ inventory history are never included in the meal prompt.
 Key features:
 
 - Local-first pantry inventory
-- Offline Indian ingredient catalog with regional aliases
+- Offline catalog of 450+ household foods and regional aliases
+- Editable expiry dates for existing pantry items
+- Dedicated Snacks section for available snacks
 - Expiry-first meal planning that skips expired ingredients
 - Pantry quantity checks and missing-ingredient shopping list
 - Confirmed Cook & deduct pantry updates
@@ -47,11 +50,11 @@ Key features:
 Veggie Prep is designed to make everyday meal planning simpler while keeping
 you in control of where your data goes.
 
-## Initial release notes
+## Release notes — 0.2.0
 
-First release of Veggie Prep for Android: quick-add Indian ingredients,
-expiry-first meal suggestions, missing-item shopping, confirmed pantry
-deduction, on-device AI choices, and explicit network-sharing controls.
+Quick Add now covers 450+ household foods, including breads, flatbreads, eggs,
+proteins, prepared foods, sauces, frozen items, beverages, and leftovers.
+Pantry expiry dates can now be changed or cleared after an item is added.
 
 ## Suggested category
 

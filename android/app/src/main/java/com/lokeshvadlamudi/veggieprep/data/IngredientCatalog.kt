@@ -91,7 +91,7 @@ object IndianIngredientCatalog {
         item("little-millet", "Little millet", "🌾", "Millets", "500", "g", "pantry", 120, "samai", "samalu"),
         item("vermicelli", "Vermicelli", "🍜", "Grains & flours", "500", "g", "pantry", 120, "seviyan", "semiya"),
 
-        item("paneer", "Paneer", "🧀", "Dairy", "200", "g", "fridge", 4, "cottage cheese"),
+        item("paneer", "Paneer", "🧀", "Dairy", "200", "g", "fridge", 4),
         item("milk", "Milk", "🥛", "Dairy", "1", "l", "fridge", 5, "doodh", "paalu", "paal"),
         item("curd", "Curd", "🥣", "Dairy", "500", "g", "fridge", 7, "yogurt", "dahi", "perugu", "thayir"),
         item("buttermilk", "Buttermilk", "🥛", "Dairy", "1", "l", "fridge", 4, "chaas", "majjiga", "mor"),
@@ -146,7 +146,7 @@ object IndianIngredientCatalog {
         item("flax-seeds", "Flax seeds", "🫘", "Nuts & seeds", "200", "g", "pantry", 120, "alsi", "avise ginjalu"),
         item("jaggery", "Jaggery", "🟤", "Sweeteners", "500", "g", "pantry", 180, "gur", "bellam", "vellam"),
         item("sugar", "Sugar", "🍚", "Sweeteners", "1", "kg", "pantry", 365, "cheeni", "sakkarai"),
-    )
+    ) + expandedHouseholdFoods()
 
     private val byAlias: Map<String, CatalogIngredient> = buildMap {
         items.forEach { ingredient ->
@@ -180,6 +180,16 @@ object IndianIngredientCatalog {
     }
 
     fun canonicalKey(name: String): String = find(name)?.id ?: normalize(name).replace(' ', '-')
+
+    fun isSnackCategory(category: String): Boolean = category in setOf(
+        "Snacks",
+        "Indian snacks",
+        "Bakery & desserts",
+        "Indian sweets",
+    )
+
+    fun isSnack(name: String, storedCategory: String = ""): Boolean =
+        isSnackCategory(storedCategory) || find(name)?.let { isSnackCategory(it.category) } == true
 
     private fun item(
         id: String,
