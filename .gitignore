@@ -23,3 +23,13 @@ media/
 .DS_Store
 .idea/
 .vscode/
+
+# Developer-only Django settings
+config/settings_dev.py
+
+# Android local/build output
+android/.gradle/
+android/local.properties
+android/**/build/
+*.jks
+*.keystore
