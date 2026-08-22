@@ -108,6 +108,46 @@ class LocalStoreMealFlowInstrumentedTest {
         assertEquals(listOf("Dinner", "Lunch"), meals.mapNotNull { it.mealType }.sorted())
     }
 
+    @Test fun deletesSavedMealsAndRemovesAnEmptyWeeklyPlan() {
+        val standaloneMealId = store.saveMeal(plannedMeal("Standalone dinner", "2026-08-23", "Dinner"))
+        store.deleteMeal(standaloneMealId)
+        assertTrue(store.listMeals().isEmpty())
+
+        val planId = store.saveWeeklyPlan(
+            WeeklyPlan(
+                weekStart = "2026-08-24",
+                servings = 2,
+                maxMinutes = 45,
+                mealsPerDay = 1,
+                daysCount = 1,
+                preference = "vegetarian",
+                provider = "test",
+            ),
+            listOf(plannedMeal("Monday dinner", "2026-08-24", "Dinner")),
+        )
+        val plannedMealId = store.listMeals().single { it.planId == planId }.id
+
+        store.deleteMeal(plannedMealId)
+
+        assertTrue(store.listMeals().isEmpty())
+        assertEquals(null, store.latestWeeklyPlan())
+    }
+
+    @Test fun deletingACookedMealDoesNotRestoreConsumedPantry() {
+        val lotId = store.addLot("Paneer", 500_000, "g", "fridge", "2026-08-22", "2026-08-26")
+        val mealId = store.saveMeal(
+            plannedMeal("Paneer dinner", "2026-08-23", "Dinner").copy(
+                allocations = listOf(MealAllocation(lotId, "Paneer", "g", 200_000, "2026-08-26", true)),
+            ),
+        )
+        store.cookMeal(mealId)
+
+        store.deleteMeal(mealId)
+
+        assertTrue(store.listMeals().isEmpty())
+        assertEquals(300_000L, store.listPantry().single().quantityMilli)
+    }
+
     @Test fun consumesACombinedDisplayQuantityAcrossMatchingLots() {
         val first = store.addLot("Eggs", 12_000, "count", "fridge", "2026-08-22", "2026-09-19")
         val second = store.addLot("Eggs", 12_000, "count", "fridge", "2026-08-22", "2026-09-19")

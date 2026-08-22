@@ -15,7 +15,7 @@ class RemoteOpenAiMealAiTest {
                 .get("enable_thinking")
                 .asBoolean,
         )
-        assertEquals(1800, body.get("max_tokens").asInt)
+        assertEquals(3000, body.get("max_tokens").asInt)
         val responseFormat = body.getAsJsonObject("response_format")
         assertEquals("json_schema", responseFormat.get("type").asString)
         val jsonSchema = responseFormat.getAsJsonObject("json_schema")
@@ -26,12 +26,25 @@ class RemoteOpenAiMealAiTest {
     }
 
     @Test
+    fun deepSeekRequestsDisableThinkingAndRequireMealSchema() {
+        val body = createRemoteRequestBody("deepseek-v4-flash-0731", "plan a meal")
+
+        assertFalse(
+            body.getAsJsonObject("chat_template_kwargs")
+                .get("enable_thinking")
+                .asBoolean,
+        )
+        assertEquals(3000, body.get("max_tokens").asInt)
+        assertEquals("json_schema", body.getAsJsonObject("response_format").get("type").asString)
+    }
+
+    @Test
     fun otherProvidersReceiveThePortableOpenAiRequest() {
         val body = createRemoteRequestBody("gpt-compatible-model", "plan a meal")
 
         assertFalse(body.has("chat_template_kwargs"))
         assertFalse(body.has("response_format"))
-        assertEquals(1800, body.get("max_tokens").asInt)
+        assertEquals(3000, body.get("max_tokens").asInt)
         assertEquals("plan a meal", body.getAsJsonArray("messages")[0].asJsonObject.get("content").asString)
     }
 }

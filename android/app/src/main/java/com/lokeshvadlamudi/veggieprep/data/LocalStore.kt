@@ -494,6 +494,30 @@ class LocalStore(
         }
     }
 
+    fun deleteMeal(mealId: Long) {
+        writableDatabase.inTransaction {
+            val planId = rawQuery(
+                "SELECT plan_id FROM meals WHERE id = ?",
+                arrayOf(mealId.toString()),
+            ).use { cursor ->
+                require(cursor.moveToFirst()) { "That meal is no longer available." }
+                cursor.getLongOrNull(0)
+            }
+            require(delete("meals", "id = ?", arrayOf(mealId.toString())) == 1) {
+                "That meal could not be deleted."
+            }
+            if (planId != null) {
+                val remaining = rawQuery(
+                    "SELECT COUNT(*) FROM meals WHERE plan_id = ?",
+                    arrayOf(planId.toString()),
+                ).use { cursor -> cursor.moveToFirst(); cursor.getLong(0) }
+                if (remaining == 0L) {
+                    delete("weekly_plans", "id = ?", arrayOf(planId.toString()))
+                }
+            }
+        }
+    }
+
     fun cookMeal(mealId: Long) {
         writableDatabase.inTransaction {
             val meal = rawQuery(

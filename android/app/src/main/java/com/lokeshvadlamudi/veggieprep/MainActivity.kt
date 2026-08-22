@@ -271,6 +271,7 @@ private fun VeggiePrepApp(viewModel: MainViewModel) {
                     onGenerate = viewModel::generateMeal,
                     onGenerateWeek = viewModel::generateWeeklyPlan,
                     onCook = viewModel::cookMeal,
+                    onDelete = viewModel::deleteMeal,
                     onAddMissing = {
                         viewModel.addMissingToShopping(it)
                         section = AppSection.SHOPPING
@@ -903,6 +904,7 @@ private fun MealsScreen(
     onGenerate: (Int, Int, String, Boolean, Boolean) -> Unit,
     onGenerateWeek: (Int, Int, Int, Int, String, Boolean, Boolean) -> Unit,
     onCook: (MealProposal) -> Unit,
+    onDelete: (MealProposal) -> Unit,
     onAddMissing: (MealProposal) -> Unit,
     onAddWeeklyMissing: () -> Unit,
     openSettings: () -> Unit,
@@ -1041,7 +1043,12 @@ private fun MealsScreen(
                 }
             }
             items(weeklyMeals, key = { "weekly-${it.id}" }) { meal ->
-                MealCard(meal, onCook = { onCook(meal) }, onAddMissing = { onAddMissing(meal) })
+                MealCard(
+                    meal,
+                    onCook = { onCook(meal) },
+                    onDelete = { onDelete(meal) },
+                    onAddMissing = { onAddMissing(meal) },
+                )
             }
         }
         val savedMeals = state.meals.filter { it.planId == null }
@@ -1050,7 +1057,12 @@ private fun MealsScreen(
         } else if (savedMeals.isNotEmpty()) {
             item { Text("Saved meals", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold) }
             items(savedMeals, key = { it.id }) { meal ->
-                MealCard(meal, onCook = { onCook(meal) }, onAddMissing = { onAddMissing(meal) })
+                MealCard(
+                    meal,
+                    onCook = { onCook(meal) },
+                    onDelete = { onDelete(meal) },
+                    onAddMissing = { onAddMissing(meal) },
+                )
             }
         }
     }
@@ -1161,9 +1173,11 @@ private fun NetworkMealDisclosureDialog(
 private fun MealCard(
     meal: MealProposal,
     onCook: () -> Unit,
+    onDelete: () -> Unit,
     onAddMissing: () -> Unit,
 ) {
     var confirmCook by remember { mutableStateOf(false) }
+    var confirmDelete by remember { mutableStateOf(false) }
     val rescued = meal.allocations.filter { it.rescued }.map { it.name }.distinct()
     Card(colors = CardDefaults.cardColors(containerColor = Color.White), shape = RoundedCornerShape(18.dp)) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -1198,6 +1212,9 @@ private fun MealCard(
                     Button(onClick = { confirmCook = true }) { Text("Cook & deduct pantry") }
                 }
             }
+            TextButton(onClick = { confirmDelete = true }) {
+                Text("Delete saved meal", color = Danger)
+            }
         }
     }
 
@@ -1220,6 +1237,26 @@ private fun MealCard(
                 Button(onClick = { confirmCook = false; onCook() }) { Text("Cook and deduct") }
             },
             dismissButton = { TextButton(onClick = { confirmCook = false }) { Text("Cancel") } },
+        )
+    }
+
+    if (confirmDelete) {
+        AlertDialog(
+            onDismissRequest = { confirmDelete = false },
+            title = { Text("Delete ${meal.title}?") },
+            text = {
+                Text(
+                    if (meal.status == MealStatus.COOKED) {
+                        "This removes the saved meal from this phone. Pantry ingredients already deducted will not be restored, and shopping items will not change."
+                    } else {
+                        "This removes the saved meal from this phone. Pantry quantities and shopping items will not change."
+                    },
+                )
+            },
+            confirmButton = {
+                Button(onClick = { confirmDelete = false; onDelete() }) { Text("Delete meal") }
+            },
+            dismissButton = { TextButton(onClick = { confirmDelete = false }) { Text("Cancel") } },
         )
     }
 }

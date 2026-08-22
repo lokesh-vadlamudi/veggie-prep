@@ -57,25 +57,26 @@ class RemoteOpenAiMealAi(
 }
 
 internal fun createRemoteRequestBody(model: String, prompt: String): JsonObject = JsonObject().apply {
-    val isQwen = model.contains("qwen", ignoreCase = true)
+    val supportsStructuredMealOutput = model.contains("qwen", ignoreCase = true) ||
+        model.contains("deepseek", ignoreCase = true)
     addProperty("model", model)
     addProperty("temperature", 0.25)
-    addProperty("max_tokens", 1800)
+    addProperty("max_tokens", 3000)
     add("messages", JsonArray().apply {
         add(JsonObject().apply {
             addProperty("role", "user")
             addProperty("content", prompt)
         })
     })
-    if (isQwen) {
+    if (supportsStructuredMealOutput) {
         add("chat_template_kwargs", JsonObject().apply {
             addProperty("enable_thinking", false)
         })
-        add("response_format", JsonParser.parseString(QWEN_MEAL_RESPONSE_FORMAT).asJsonObject)
+        add("response_format", JsonParser.parseString(STRUCTURED_MEAL_RESPONSE_FORMAT).asJsonObject)
     }
 }
 
-private val QWEN_MEAL_RESPONSE_FORMAT = """
+private val STRUCTURED_MEAL_RESPONSE_FORMAT = """
     {
       "type": "json_schema",
       "json_schema": {

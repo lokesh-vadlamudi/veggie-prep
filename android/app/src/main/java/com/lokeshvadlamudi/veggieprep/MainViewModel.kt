@@ -517,6 +517,22 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    fun deleteMeal(meal: MealProposal) {
+        viewModelScope.launch(Dispatchers.IO) {
+            runCatching {
+                database.deleteMeal(meal.id)
+                database.latestWeeklyPlan() to database.listMeals()
+            }.onSuccess { (weeklyPlan, meals) ->
+                mutableState.value = mutableState.value.copy(
+                    weeklyPlan = weeklyPlan,
+                    meals = meals,
+                    status = "Meal deleted",
+                    error = null,
+                )
+            }.onFailure { showError(it.safeMessage()) }
+        }
+    }
+
     fun addMissingToShopping(meal: MealProposal) {
         if (meal.missingIngredients.isEmpty()) {
             showError("This meal has no missing ingredients.")
