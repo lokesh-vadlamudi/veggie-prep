@@ -363,6 +363,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun generateWeeklyPlan(
         servings: Int,
+        mealsPerDay: Int,
+        days: Int,
         maxMinutes: Int,
         preference: String,
         networkDisclosureConfirmed: Boolean,
@@ -370,13 +372,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     ) {
         val snapshot = mutableState.value
         if (snapshot.pantry.isEmpty()) {
-            showError("Add at least one pantry item before planning the week.")
+            showError("Add at least one pantry item before planning a schedule.")
             return
         }
         val settings = settingsStore.load()
         val eligiblePantry = MealPlanningPolicy.eligiblePantry(snapshot.pantry)
         if (eligiblePantry.isEmpty()) {
-            showError("All pantry items are expired. Discard or replace them before planning the week.")
+            showError("All pantry items are expired. Discard or replace them before planning a schedule.")
             return
         }
         val disclosureRemembered = settings.provider == AiProviderType.REMOTE_OPENAI &&
@@ -390,9 +392,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             if (rememberNetworkDisclosure) settingsStore.rememberNetworkDisclosure(settings.baseUrl)
             else settingsStore.forgetNetworkDisclosure(settings.baseUrl)
         }
+        val slots = WeeklyMealPlanningPolicy.mealSlots(mealsPerDay)
+        val normalizedDays = days.coerceIn(1, 14)
+        val totalMeals = WeeklyMealPlanningPolicy.totalMealCount(normalizedDays, mealsPerDay)
         mutableState.value = snapshot.copy(
             busy = true,
-            status = "Planning meal 1 of ${WeeklyMealPlanningPolicy.DEFAULT_MEAL_COUNT}…",
+            status = "Planning meal 1 of $totalMeals…",
             error = null,
             networkDisclosureRemembered = if (remoteChoiceMade) rememberNetworkDisclosure else disclosureRemembered,
         )
@@ -401,33 +406,55 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 val provider = providerFor(settings)
                 val weekStart = WeeklyMealPlanningPolicy.nextWeekStart()
                 val plannedMeals = mutableListOf<MealProposal>()
-                repeat(WeeklyMealPlanningPolicy.DEFAULT_MEAL_COUNT) { index ->
-                    mutableState.value = mutableState.value.copy(
-                        status = "Planning meal ${index + 1} of ${WeeklyMealPlanningPolicy.DEFAULT_MEAL_COUNT}…",
-                    )
-                    val virtualPantry = WeeklyMealPlanningPolicy.remainingPantry(eligiblePantry, plannedMeals)
-                    val requiredItem = MealPlanningPolicy.requiredExpiryItem(virtualPantry)
-                    val diversity = plannedMeals.joinToString { it.title }.takeIf { it.isNotBlank() }
-                    val dayPreference = buildString {
-                        append(preference.ifBlank { "No special preference" })
-                        append(". This is meal ${index + 1} of a weekday plan.")
-                        diversity?.let { append(" Avoid repeating these earlier meals: $it.") }
+                repeat(normalizedDays) { dayIndex ->
+                    val day = weekStart.plusDays(dayIndex.toLong())
+                    slots.forEach { slot ->
+                        val mealNumber = plannedMeals.size + 1
+                        mutableState.value = mutableState.value.copy(
+                            status = "Planning $slot for ${day.dayOfWeek.name.lowercase().replaceFirstChar(Char::uppercase)} • $mealNumber of $totalMeals…",
+                        )
+                        val virtualPantry = WeeklyMealPlanningPolicy.remainingPantry(eligiblePantry, plannedMeals)
+                        val requiredItem = MealPlanningPolicy.requiredExpiryItem(virtualPantry)
+                        val diversity = plannedMeals.takeLast(12).joinToString { it.title }.takeIf { it.isNotBlank() }
+                        val dayPreference = buildString {
+                            append(preference.ifBlank { "No special preference" })
+                            append(". Plan $slot for ${day.dayOfWeek.name.lowercase()} in a $normalizedDays-day, ${slots.size}-meals-per-day schedule.")
+                            append(" Make it appropriate for $slot and $servings people.")
+                            diversity?.let { append(" Avoid repeating these recent meals: $it.") }
+                        }
+                        var planned: MealProposal? = null
+                        var lastFailure: Throwable? = null
+                        for (attempt in 1..2) {
+                            try {
+                                val retryNote = if (attempt == 1) dayPreference else "$dayPreference Return a corrected, strictly valid meal this time."
+                                val prompt = MealPrompt.create(virtualPantry, servings, maxMinutes, retryNote, requiredItem)
+                                val raw = provider.generate(prompt)
+                                val proposal = MealParser.parse(raw, provider.label)
+                                planned = MealPlanningPolicy.reconcile(
+                                    meal = proposal,
+                                    pantry = virtualPantry,
+                                    requiredItem = requiredItem,
+                                    requestedServings = servings,
+                                    maxMinutes = maxMinutes,
+                                ).copy(
+                                    plannedFor = day.toString(),
+                                    mealType = slot,
+                                )
+                                break
+                            } catch (failure: Throwable) {
+                                if (failure is kotlinx.coroutines.CancellationException) throw failure
+                                lastFailure = failure
+                            }
+                        }
+                        plannedMeals += planned ?: throw (lastFailure ?: IllegalStateException("The meal could not be generated."))
                     }
-                    val prompt = MealPrompt.create(virtualPantry, servings, maxMinutes, dayPreference, requiredItem)
-                    val raw = provider.generate(prompt)
-                    val proposal = MealParser.parse(raw, provider.label)
-                    plannedMeals += MealPlanningPolicy.reconcile(
-                        meal = proposal,
-                        pantry = virtualPantry,
-                        requiredItem = requiredItem,
-                        requestedServings = servings,
-                        maxMinutes = maxMinutes,
-                    ).copy(plannedFor = weekStart.plusDays(index.toLong()).toString())
                 }
                 val plan = WeeklyPlan(
                     weekStart = weekStart.toString(),
                     servings = servings,
                     maxMinutes = maxMinutes,
+                    mealsPerDay = slots.size,
+                    daysCount = normalizedDays,
                     preference = preference,
                     provider = provider.label,
                 )
@@ -440,7 +467,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     weeklyPlan = plan,
                     meals = meals,
                     busy = false,
-                    status = "Next week's meal plan is ready",
+                    status = "Your $totalMeals-meal schedule is ready",
                     error = null,
                 )
             }.onFailure {

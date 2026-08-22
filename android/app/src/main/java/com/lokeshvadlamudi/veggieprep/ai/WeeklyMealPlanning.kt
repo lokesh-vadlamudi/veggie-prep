@@ -9,7 +9,16 @@ import java.time.LocalDate
 import java.time.temporal.TemporalAdjusters
 
 object WeeklyMealPlanningPolicy {
-    const val DEFAULT_MEAL_COUNT = 5
+    const val DEFAULT_DAYS = 7
+
+    fun mealSlots(mealsPerDay: Int): List<String> = when (mealsPerDay.coerceIn(1, 3)) {
+        1 -> listOf("Dinner")
+        2 -> listOf("Lunch", "Dinner")
+        else -> listOf("Breakfast", "Lunch", "Dinner")
+    }
+
+    fun totalMealCount(days: Int, mealsPerDay: Int): Int =
+        days.coerceIn(1, 14) * mealSlots(mealsPerDay).size
 
     fun nextWeekStart(today: LocalDate = LocalDate.now()): LocalDate =
         today.with(TemporalAdjusters.nextOrSame(DayOfWeek.MONDAY))

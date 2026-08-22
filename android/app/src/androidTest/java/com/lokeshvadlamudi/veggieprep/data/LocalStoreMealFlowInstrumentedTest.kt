@@ -88,19 +88,24 @@ class LocalStoreMealFlowInstrumentedTest {
                 weekStart = "2026-08-24",
                 servings = 2,
                 maxMinutes = 45,
+                mealsPerDay = 2,
+                daysCount = 1,
                 preference = "vegetarian",
                 provider = "test",
             ),
             listOf(
-                plannedMeal("Monday meal", "2026-08-24"),
-                plannedMeal("Tuesday meal", "2026-08-25"),
+                plannedMeal("Monday lunch", "2026-08-24", "Lunch"),
+                plannedMeal("Monday dinner", "2026-08-24", "Dinner"),
             ),
         )
 
         val plan = requireNotNull(store.latestWeeklyPlan())
         val meals = store.listMeals().filter { it.planId == planId }.sortedBy { it.plannedFor }
         assertEquals(planId, plan.id)
-        assertEquals(listOf("2026-08-24", "2026-08-25"), meals.map { it.plannedFor })
+        assertEquals(2, plan.mealsPerDay)
+        assertEquals(1, plan.daysCount)
+        assertEquals(listOf("2026-08-24", "2026-08-24"), meals.map { it.plannedFor })
+        assertEquals(listOf("Dinner", "Lunch"), meals.mapNotNull { it.mealType }.sorted())
     }
 
     @Test fun consumesACombinedDisplayQuantityAcrossMatchingLots() {
@@ -115,7 +120,7 @@ class LocalStoreMealFlowInstrumentedTest {
         assertEquals(6_000L, remaining.single().quantityMilli)
     }
 
-    private fun plannedMeal(title: String, day: String) = MealProposal(
+    private fun plannedMeal(title: String, day: String, mealType: String) = MealProposal(
         title = title,
         servings = 2,
         timeMinutes = 30,
@@ -126,5 +131,6 @@ class LocalStoreMealFlowInstrumentedTest {
         ingredients = listOf(MealIngredient("Spinach", "g", 100_000)),
         provider = "test",
         plannedFor = day,
+        mealType = mealType,
     )
 }

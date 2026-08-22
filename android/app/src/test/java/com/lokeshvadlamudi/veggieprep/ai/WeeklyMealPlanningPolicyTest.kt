@@ -9,6 +9,13 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class WeeklyMealPlanningPolicyTest {
+    @Test fun createsBreakfastLunchAndDinnerSlotsForEveryDay() {
+        assertEquals(listOf("Breakfast", "Lunch", "Dinner"), WeeklyMealPlanningPolicy.mealSlots(3))
+        assertEquals(21, WeeklyMealPlanningPolicy.totalMealCount(7, 3))
+        assertEquals(6, WeeklyMealPlanningPolicy.totalMealCount(3, 2))
+        assertEquals(listOf("Dinner"), WeeklyMealPlanningPolicy.mealSlots(1))
+    }
+
     @Test fun reservesEachLotAcrossTheWholeWeekWithoutDoubleCounting() {
         val pantry = listOf(pantry(1, "Spinach", 200_000), pantry(2, "Tomatoes", 4_000, "count"))
         val first = meal(

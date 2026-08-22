@@ -13,7 +13,7 @@ import java.util.UUID
 class LocalStore(
     context: Context,
     databaseName: String = "veggie_prep.db",
-) : SQLiteOpenHelper(context, databaseName, null, 7) {
+) : SQLiteOpenHelper(context, databaseName, null, 8) {
     private val gson = Gson()
 
     override fun onCreate(db: SQLiteDatabase) {
@@ -68,6 +68,7 @@ class LocalStore(
                 cooked_at INTEGER,
                 plan_id INTEGER,
                 planned_for TEXT,
+                meal_type TEXT,
                 created_at INTEGER NOT NULL
             )
             """.trimIndent(),
@@ -137,6 +138,13 @@ class LocalStore(
                 )
                 """.trimIndent(),
             )
+        }
+        if (oldVersion < 8) {
+            db.execSQL("ALTER TABLE meals ADD COLUMN meal_type TEXT")
+            if (oldVersion >= 5) {
+                db.execSQL("ALTER TABLE weekly_plans ADD COLUMN meals_per_day INTEGER NOT NULL DEFAULT 1")
+                db.execSQL("ALTER TABLE weekly_plans ADD COLUMN days_count INTEGER NOT NULL DEFAULT 7")
+            }
         }
     }
 
@@ -369,6 +377,8 @@ class LocalStore(
 
     fun saveWeeklyPlan(plan: WeeklyPlan, meals: List<MealProposal>): Long = writableDatabase.inTransaction {
         require(meals.isNotEmpty()) { "A weekly plan needs at least one meal." }
+        require(plan.mealsPerDay in 1..3 && plan.daysCount in 1..14) { "Choose 1–3 meals per day and 1–14 days." }
+        require(meals.size == plan.mealsPerDay * plan.daysCount) { "The schedule does not contain every requested meal slot." }
         val planId = insertOrThrow(
             "weekly_plans",
             null,
@@ -376,6 +386,8 @@ class LocalStore(
                 put("week_start", plan.weekStart)
                 put("servings", plan.servings)
                 put("max_minutes", plan.maxMinutes)
+                put("meals_per_day", plan.mealsPerDay)
+                put("days_count", plan.daysCount)
                 put("preference", plan.preference.take(500))
                 put("provider", plan.provider)
                 put("created_at", plan.createdAt)
@@ -386,7 +398,8 @@ class LocalStore(
                 this,
                 meal.copy(
                     planId = planId,
-                    plannedFor = meal.plannedFor ?: java.time.LocalDate.parse(plan.weekStart).plusDays(index.toLong()).toString(),
+                    plannedFor = meal.plannedFor ?: java.time.LocalDate.parse(plan.weekStart)
+                        .plusDays((index / plan.mealsPerDay.coerceAtLeast(1)).toLong()).toString(),
                 ),
             )
         }
@@ -409,6 +422,8 @@ class LocalStore(
             weekStart = cursor.getString(cursor.getColumnIndexOrThrow("week_start")),
             servings = cursor.getInt(cursor.getColumnIndexOrThrow("servings")),
             maxMinutes = cursor.getInt(cursor.getColumnIndexOrThrow("max_minutes")),
+            mealsPerDay = cursor.getInt(cursor.getColumnIndexOrThrow("meals_per_day")),
+            daysCount = cursor.getInt(cursor.getColumnIndexOrThrow("days_count")),
             preference = cursor.getString(cursor.getColumnIndexOrThrow("preference")),
             provider = cursor.getString(cursor.getColumnIndexOrThrow("provider")),
             createdAt = cursor.getLong(cursor.getColumnIndexOrThrow("created_at")),
@@ -434,6 +449,7 @@ class LocalStore(
             meal.cookedAt?.let { put("cooked_at", it) }
             meal.planId?.let { put("plan_id", it) }
             meal.plannedFor?.let { put("planned_for", it) }
+            meal.mealType?.let { put("meal_type", it) }
             put("created_at", meal.createdAt)
         },
     )
@@ -471,6 +487,7 @@ class LocalStore(
                         createdAt = cursor.getLong(cursor.getColumnIndexOrThrow("created_at")),
                         planId = cursor.getLongOrNull(cursor.getColumnIndexOrThrow("plan_id")),
                         plannedFor = cursor.getStringOrNull(cursor.getColumnIndexOrThrow("planned_for")),
+                        mealType = cursor.getStringOrNull(cursor.getColumnIndexOrThrow("meal_type")),
                     ),
                 )
             }
@@ -635,6 +652,8 @@ class LocalStore(
                 week_start TEXT NOT NULL,
                 servings INTEGER NOT NULL,
                 max_minutes INTEGER NOT NULL,
+                meals_per_day INTEGER NOT NULL DEFAULT 1,
+                days_count INTEGER NOT NULL DEFAULT 7,
                 preference TEXT NOT NULL,
                 provider TEXT NOT NULL,
                 created_at INTEGER NOT NULL

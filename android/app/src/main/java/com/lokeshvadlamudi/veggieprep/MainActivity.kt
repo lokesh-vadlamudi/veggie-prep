@@ -118,6 +118,8 @@ private data class PendingMealRequest(
     val maxMinutes: Int,
     val preference: String,
     val weekly: Boolean = false,
+    val mealsPerDay: Int = 1,
+    val days: Int = 1,
 )
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -899,27 +901,39 @@ private fun ItemDetailsDialog(
 private fun MealsScreen(
     state: AppUiState,
     onGenerate: (Int, Int, String, Boolean, Boolean) -> Unit,
-    onGenerateWeek: (Int, Int, String, Boolean, Boolean) -> Unit,
+    onGenerateWeek: (Int, Int, Int, Int, String, Boolean, Boolean) -> Unit,
     onCook: (MealProposal) -> Unit,
     onAddMissing: (MealProposal) -> Unit,
     onAddWeeklyMissing: () -> Unit,
     openSettings: () -> Unit,
 ) {
-    var servingsText by rememberSaveable { mutableStateOf("2") }
+    var servingsText by rememberSaveable { mutableStateOf("3") }
+    var mealsPerDayText by rememberSaveable { mutableStateOf("3") }
+    var daysText by rememberSaveable { mutableStateOf("7") }
     var minutesText by rememberSaveable { mutableStateOf("45") }
+    var cuisines by rememberSaveable { mutableStateOf("Indian, Italian, Mexican, Mediterranean") }
     var preference by rememberSaveable { mutableStateOf("") }
     var pendingRequest by remember { mutableStateOf<PendingMealRequest?>(null) }
     var rememberNetworkDisclosure by rememberSaveable { mutableStateOf(false) }
 
     fun requestMeal(weekly: Boolean = false, forceDisclosure: Boolean = false) {
+        val combinedPreference = buildString {
+            if (cuisines.isNotBlank()) append("Rotate across these cuisines: ${cuisines.trim()}.")
+            if (preference.isNotBlank()) {
+                if (isNotEmpty()) append(' ')
+                append(preference.trim())
+            }
+        }
         val request = PendingMealRequest(
-            servings = servingsText.toIntOrNull()?.coerceIn(1, 20) ?: 2,
+            servings = servingsText.toIntOrNull()?.coerceIn(1, 20) ?: 3,
             maxMinutes = minutesText.toIntOrNull()?.coerceIn(5, 360) ?: 45,
-            preference = preference,
+            preference = combinedPreference,
             weekly = weekly,
+            mealsPerDay = if (weekly) mealsPerDayText.toIntOrNull()?.coerceIn(1, 3) ?: 3 else 1,
+            days = if (weekly) daysText.toIntOrNull()?.coerceIn(1, 14) ?: 7 else 1,
         )
         if (state.pantry.isEmpty()) {
-            if (weekly) onGenerateWeek(request.servings, request.maxMinutes, request.preference, false, false)
+            if (weekly) onGenerateWeek(request.servings, request.mealsPerDay, request.days, request.maxMinutes, request.preference, false, false)
             else onGenerate(request.servings, request.maxMinutes, request.preference, false, false)
         } else if (
             state.settings.provider == AiProviderType.REMOTE_OPENAI &&
@@ -928,7 +942,7 @@ private fun MealsScreen(
             rememberNetworkDisclosure = state.networkDisclosureRemembered
             pendingRequest = request
         } else {
-            if (weekly) onGenerateWeek(request.servings, request.maxMinutes, request.preference, false, false)
+            if (weekly) onGenerateWeek(request.servings, request.mealsPerDay, request.days, request.maxMinutes, request.preference, false, false)
             else onGenerate(request.servings, request.maxMinutes, request.preference, false, false)
         }
     }
@@ -952,7 +966,7 @@ private fun MealsScreen(
                     }
                     Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                         OutlinedTextField(
-                            servingsText, { servingsText = it }, label = { Text("Servings") },
+                            servingsText, { servingsText = it }, label = { Text("People") },
                             modifier = Modifier.weight(1f), keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number), singleLine = true,
                         )
                         OutlinedTextField(
@@ -960,6 +974,32 @@ private fun MealsScreen(
                             modifier = Modifier.weight(1f), keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number), singleLine = true,
                         )
                     }
+                    Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                        OutlinedTextField(
+                            mealsPerDayText, { mealsPerDayText = it }, label = { Text("Meals / day") },
+                            supportingText = { Text("1–3") },
+                            modifier = Modifier.weight(1f), keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number), singleLine = true,
+                        )
+                        OutlinedTextField(
+                            daysText, { daysText = it }, label = { Text("Days") },
+                            supportingText = { Text("1–14") },
+                            modifier = Modifier.weight(1f), keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number), singleLine = true,
+                        )
+                    }
+                    Text(
+                        "1 meal: Dinner • 2 meals: Lunch + Dinner • 3 meals: Breakfast + Lunch + Dinner",
+                        color = Muted,
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                    Text("Schedules start next Monday.", color = Muted, style = MaterialTheme.typography.bodySmall)
+                    OutlinedTextField(
+                        cuisines,
+                        { cuisines = it },
+                        label = { Text("Cuisine rotation") },
+                        supportingText = { Text("Comma-separated; edit or clear this list") },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true,
+                    )
                     OutlinedTextField(preference, { preference = it }, label = { Text("Preference (optional)") }, modifier = Modifier.fillMaxWidth())
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         Button(
@@ -969,7 +1009,7 @@ private fun MealsScreen(
                         OutlinedButton(
                             onClick = { requestMeal(weekly = true) },
                             enabled = !state.busy,
-                        ) { Text("Plan next week") }
+                        ) { Text("Plan schedule") }
                     }
                     TextButton(onClick = openSettings) { Text("Change AI") }
                     if (state.settings.provider == AiProviderType.REMOTE_OPENAI) {
@@ -981,13 +1021,19 @@ private fun MealsScreen(
             }
         }
         val weeklyPlan = state.weeklyPlan
-        val weeklyMeals = state.meals.filter { it.planId == weeklyPlan?.id }.sortedBy { it.plannedFor }
+        val weeklyMeals = state.meals.filter { it.planId == weeklyPlan?.id }.sortedWith(
+            compareBy<MealProposal> { it.plannedFor }.thenBy { mealTypeOrder(it.mealType) },
+        )
         if (weeklyPlan != null && weeklyMeals.isNotEmpty()) {
             item {
                 Card(colors = CardDefaults.cardColors(containerColor = PaleGreen), shape = RoundedCornerShape(18.dp)) {
                     Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Text("Week of ${weeklyPlan.weekStart}", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
-                        Text("${weeklyMeals.size} meals • expiry-aware pantry reservations", color = Muted)
+                        Text("Plan starting ${weeklyPlan.weekStart}", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+                        Text(
+                            "${weeklyPlan.daysCount} days • ${weeklyPlan.mealsPerDay} meals/day • ${weeklyPlan.servings} people • ${weeklyMeals.size} meals",
+                            color = Muted,
+                        )
+                        Text("Expiry-aware pantry reservations", color = Muted)
                         if (weeklyMeals.any { it.missingIngredients.isNotEmpty() }) {
                             OutlinedButton(onClick = onAddWeeklyMissing) { Text("Add all missing items to shopping") }
                         }
@@ -1024,6 +1070,8 @@ private fun MealsScreen(
                 if (request.weekly) {
                     onGenerateWeek(
                         request.servings,
+                        request.mealsPerDay,
+                        request.days,
                         request.maxMinutes,
                         request.preference,
                         true,
@@ -1076,7 +1124,11 @@ private fun NetworkMealDisclosureDialog(
                     )
                 }
                 Text(
-                    "${if (request.weekly) "Five-meal weekday plan" else "Meal request"}: ${request.servings} servings, up to ${request.maxMinutes} minutes per meal. Preference: ${request.preference.ifBlank { "none" }}.",
+                    if (request.weekly) {
+                        "${request.days}-day plan: ${request.mealsPerDay} meals/day for ${request.servings} people, up to ${request.maxMinutes} minutes per meal. Preference: ${request.preference.ifBlank { "none" }}."
+                    } else {
+                        "Meal request: ${request.servings} servings, up to ${request.maxMinutes} minutes. Preference: ${request.preference.ifBlank { "none" }}."
+                    },
                 )
                 Text(
                     "Expired items, storage locations, purchase dates, and inventory history are not sent. If configured, the API key is sent separately as an authorization header and is never included in the meal prompt.",
@@ -1085,7 +1137,7 @@ private fun NetworkMealDisclosureDialog(
                 )
                 if (request.weekly) {
                     Text(
-                        "The remaining pantry snapshot is updated and sent once for each of the five meals.",
+                        "The remaining pantry snapshot is updated and sent once for each of the ${request.days * request.mealsPerDay} meals. This can make up to ${request.days * request.mealsPerDay} AI requests.",
                         color = Muted,
                         style = MaterialTheme.typography.bodySmall,
                     )
@@ -1099,7 +1151,7 @@ private fun NetworkMealDisclosureDialog(
                 }
             }
         },
-        confirmButton = { Button(onClick = onConfirm) { Text(if (request.weekly) "Send and plan week" else "Send and suggest") } },
+        confirmButton = { Button(onClick = onConfirm) { Text(if (request.weekly) "Send and plan schedule" else "Send and suggest") } },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
     )
 }
@@ -1115,7 +1167,13 @@ private fun MealCard(
     Card(colors = CardDefaults.cardColors(containerColor = Color.White), shape = RoundedCornerShape(18.dp)) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Text(meal.title, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
-            meal.plannedFor?.let { Text("Planned for $it", color = Leaf, fontWeight = FontWeight.SemiBold) }
+            meal.plannedFor?.let {
+                Text(
+                    listOfNotNull(meal.mealType, it).joinToString(" • "),
+                    color = Leaf,
+                    fontWeight = FontWeight.SemiBold,
+                )
+            }
             Text("${meal.servings} servings  •  ${meal.timeMinutes} min  •  ${meal.provider}", color = Muted)
             if (rescued.isNotEmpty()) {
                 Text("Rescues soon: ${rescued.joinToString()}", color = Leaf, fontWeight = FontWeight.SemiBold)
@@ -1163,6 +1221,13 @@ private fun MealCard(
             dismissButton = { TextButton(onClick = { confirmCook = false }) { Text("Cancel") } },
         )
     }
+}
+
+private fun mealTypeOrder(mealType: String?): Int = when (mealType?.lowercase()) {
+    "breakfast" -> 0
+    "lunch" -> 1
+    "dinner" -> 2
+    else -> 3
 }
 
 @Composable
@@ -1308,7 +1373,7 @@ private fun AiSettingsScreen(
                     Text("Pantry items, generated meals, imported models, and AI settings are stored in this app's private storage. Android cloud backup is disabled.")
                     Text("Receipt photos are processed on the device through Android and ML Kit. Veggie Prep does not keep the original photo; only the grocery lines you approve are saved locally. Google Play services may collect limited operational diagnostics under Google's terms.")
                     Text("On-device meal generation does not send pantry data to a server.")
-                    Text("If you choose a network AI, the app shows the destination and exact pantry preview before sending. Only item names, quantities, units, expiry dates, and your meal request are sent. A five-meal plan makes up to five requests with the remaining pantry. Storage locations, purchase dates, and inventory history remain on this phone.")
+                    Text("If you choose a network AI, the app shows the destination and exact pantry preview before sending. Only item names, quantities, units, expiry dates, and your meal request are sent. A schedule can make one request per meal, using an updated remaining-pantry snapshot each time. Storage locations, purchase dates, and inventory history remain on this phone.")
                     Text("Any network AI provider you configure processes the data under its own privacy terms. You can remove all local data by clearing the app's storage or uninstalling it.")
                 }
             },

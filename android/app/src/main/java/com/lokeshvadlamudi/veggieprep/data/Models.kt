@@ -58,6 +58,7 @@ data class MealProposal(
     val createdAt: Long = System.currentTimeMillis(),
     val planId: Long? = null,
     val plannedFor: String? = null,
+    val mealType: String? = null,
 )
 
 data class WeeklyPlan(
@@ -65,6 +66,8 @@ data class WeeklyPlan(
     val weekStart: String,
     val servings: Int,
     val maxMinutes: Int,
+    val mealsPerDay: Int = 1,
+    val daysCount: Int = 7,
     val preference: String,
     val provider: String,
     val createdAt: Long = System.currentTimeMillis(),
