@@ -1150,7 +1150,7 @@ private fun NetworkMealDisclosureDialog(
                 if (request.weekly) {
                     val mealCount = request.days * request.mealsPerDay
                     Text(
-                        "The remaining pantry snapshot is updated for each of the $mealCount meals. Each meal normally uses one AI request; an invalid response may be retried once, so this uses $mealCount requests normally and at most ${mealCount * 2}.",
+                        "The complete $mealCount-meal schedule is requested in one AI call and displayed together. If the response is incomplete or invalid, nothing is saved and the app does not retry automatically.",
                         color = Muted,
                         style = MaterialTheme.typography.bodySmall,
                     )
@@ -1411,7 +1411,7 @@ private fun AiSettingsScreen(
                     Text("Pantry items, generated meals, imported models, and AI settings are stored in this app's private storage. Android cloud backup is disabled.")
                     Text("Receipt photos are processed on the device through Android and ML Kit. Veggie Prep does not keep the original photo; only the grocery lines you approve are saved locally. Google Play services may collect limited operational diagnostics under Google's terms.")
                     Text("On-device meal generation does not send pantry data to a server.")
-                    Text("If you choose a network AI, the app shows the destination and exact pantry preview before sending. Only item names, quantities, units, expiry dates, and your meal request are sent. A schedule normally makes one request per meal using an updated remaining-pantry snapshot; an invalid response may be retried once. Storage locations, purchase dates, and inventory history remain on this phone.")
+                    Text("If you choose a network AI, the app shows the destination and exact pantry preview before sending. Only item names, quantities, units, expiry dates, and your meal request are sent. A complete schedule is sent in one request and is saved only after every meal slot passes local validation. Storage locations, purchase dates, and inventory history remain on this phone.")
                     Text("Any network AI provider you configure processes the data under its own privacy terms. You can remove all local data by clearing the app's storage or uninstalling it.")
                 }
             },

@@ -14,6 +14,15 @@ class WeeklyMealPlanningPolicyTest {
         assertEquals(21, WeeklyMealPlanningPolicy.totalMealCount(7, 3))
         assertEquals(6, WeeklyMealPlanningPolicy.totalMealCount(3, 2))
         assertEquals(listOf("Dinner"), WeeklyMealPlanningPolicy.mealSlots(1))
+        assertEquals(
+            listOf(
+                MealScheduleSlot("2026-08-24", "Lunch"),
+                MealScheduleSlot("2026-08-24", "Dinner"),
+                MealScheduleSlot("2026-08-25", "Lunch"),
+                MealScheduleSlot("2026-08-25", "Dinner"),
+            ),
+            WeeklyMealPlanningPolicy.scheduleSlots(java.time.LocalDate.parse("2026-08-24"), 2, 2),
+        )
     }
 
     @Test fun reservesEachLotAcrossTheWholeWeekWithoutDoubleCounting() {
@@ -42,6 +51,26 @@ class WeeklyMealPlanningPolicyTest {
         assertTrue(combined.single().name.startsWith("Tomato"))
     }
 
+    @Test fun reconcilesTheWholeScheduleWithoutDoubleUsingPantry() {
+        val pantry = listOf(pantry(1, "Spinach", 200_000))
+        val meals = listOf(
+            meal(ingredients = listOf(MealIngredient("Spinach", "g", 150_000))),
+            meal(ingredients = listOf(MealIngredient("Spinach", "g", 100_000))),
+        )
+
+        val reconciled = WeeklyMealPlanningPolicy.reconcileSchedule(
+            meals = meals,
+            pantry = pantry,
+            requestedServings = 2,
+            maxMinutes = 30,
+            today = java.time.LocalDate.parse("2026-08-23"),
+        )
+
+        assertEquals(200_000L, reconciled.flatMap { it.allocations }.sumOf { it.quantityMilli })
+        assertEquals(50_000L, reconciled.last().missingIngredients.single().quantityMilli)
+        assertTrue(reconciled.first().allocations.single().rescued)
+    }
+
     private fun pantry(id: Long, name: String, quantity: Long, unit: String = "g") = PantryItem(
         id = id,
         name = name,
@@ -55,6 +84,7 @@ class WeeklyMealPlanningPolicyTest {
     private fun meal(
         allocations: List<MealAllocation> = emptyList(),
         missing: List<MealIngredient> = emptyList(),
+        ingredients: List<MealIngredient> = emptyList(),
     ) = MealProposal(
         title = "Test meal",
         servings = 2,
@@ -63,7 +93,7 @@ class WeeklyMealPlanningPolicyTest {
         substitutions = emptyList(),
         safetyNote = "",
         rationale = "",
-        ingredients = emptyList(),
+        ingredients = ingredients,
         provider = "test",
         allocations = allocations,
         missingIngredients = missing,

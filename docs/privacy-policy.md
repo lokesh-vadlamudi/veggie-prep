@@ -42,9 +42,10 @@ the destination and a preview before sending data. The request can contain:
 - expiry dates; and
 - the requested servings, time limit, and meal preference.
 
-A weekly plan creates five meal requests. Before each request, the app removes
-quantities already reserved by earlier meals and sends the updated remaining
-pantry preview.
+A meal schedule sends one request containing the pantry preview and all
+requested dates and meal types. The app validates the complete response and
+allocates pantry quantities locally before saving any meals. An incomplete or
+invalid schedule is not saved and is not retried automatically.
 
 Storage locations, purchase dates, and inventory history are not included in
 the meal prompt. If the configured service requires an API key, the key is

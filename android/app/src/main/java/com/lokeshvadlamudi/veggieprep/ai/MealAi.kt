@@ -11,6 +11,7 @@ import com.lokeshvadlamudi.veggieprep.data.parseMilli
 interface MealAi {
     val label: String
     suspend fun generate(prompt: String): String
+    suspend fun generateSchedule(prompt: String, mealCount: Int): String = generate(prompt)
 }
 
 object MealPrompt {

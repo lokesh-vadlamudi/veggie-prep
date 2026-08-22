@@ -11,6 +11,11 @@ import java.net.URL
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
+internal enum class MealOutputKind {
+    SINGLE,
+    SCHEDULE,
+}
+
 class RemoteOpenAiMealAi(
     baseUrl: String,
     private val model: String,
@@ -24,13 +29,23 @@ class RemoteOpenAiMealAi(
 
     override val label: String = model
 
-    override suspend fun generate(prompt: String): String = withContext(Dispatchers.IO) {
-        val body = createRemoteRequestBody(model, prompt).toString()
+    override suspend fun generate(prompt: String): String =
+        generateRemote(prompt, MealOutputKind.SINGLE, 1)
+
+    override suspend fun generateSchedule(prompt: String, mealCount: Int): String =
+        generateRemote(prompt, MealOutputKind.SCHEDULE, mealCount)
+
+    private suspend fun generateRemote(
+        prompt: String,
+        outputKind: MealOutputKind,
+        mealCount: Int,
+    ): String = withContext(Dispatchers.IO) {
+        val body = createRemoteRequestBody(model, prompt, outputKind, mealCount).toString()
 
         val connection = (URL("$baseUrl/chat/completions").openConnection() as HttpURLConnection).apply {
             requestMethod = "POST"
             connectTimeout = 15_000
-            readTimeout = 120_000
+            readTimeout = if (outputKind == MealOutputKind.SCHEDULE) 240_000 else 120_000
             doOutput = true
             setRequestProperty("Content-Type", "application/json")
             setRequestProperty("Accept", "application/json")
@@ -56,12 +71,19 @@ class RemoteOpenAiMealAi(
     }
 }
 
-internal fun createRemoteRequestBody(model: String, prompt: String): JsonObject = JsonObject().apply {
-    val supportsStructuredMealOutput = model.contains("qwen", ignoreCase = true) ||
-        model.contains("deepseek", ignoreCase = true)
+internal fun createRemoteRequestBody(
+    model: String,
+    prompt: String,
+    outputKind: MealOutputKind = MealOutputKind.SINGLE,
+    mealCount: Int = 1,
+): JsonObject = JsonObject().apply {
+    require(mealCount in 1..42) { "A schedule must contain 1 to 42 meals." }
+    val isQwen = model.contains("qwen", ignoreCase = true)
+    val isDeepSeek = model.contains("deepseek", ignoreCase = true)
+    val supportsStructuredMealOutput = isQwen || isDeepSeek
     addProperty("model", model)
     addProperty("temperature", 0.25)
-    addProperty("max_tokens", 3000)
+    addProperty("max_tokens", if (outputKind == MealOutputKind.SCHEDULE) 6_500 else 3_000)
     add("messages", JsonArray().apply {
         add(JsonObject().apply {
             addProperty("role", "user")
@@ -69,12 +91,80 @@ internal fun createRemoteRequestBody(model: String, prompt: String): JsonObject 
         })
     })
     if (supportsStructuredMealOutput) {
-        add("chat_template_kwargs", JsonObject().apply {
-            addProperty("enable_thinking", false)
-        })
-        add("response_format", JsonParser.parseString(STRUCTURED_MEAL_RESPONSE_FORMAT).asJsonObject)
+        if (isQwen) {
+            add("chat_template_kwargs", JsonObject().apply {
+                addProperty("enable_thinking", false)
+            })
+        }
+        if (isDeepSeek) {
+            addProperty("reasoning_effort", "none")
+        }
+        add(
+            "response_format",
+            if (outputKind == MealOutputKind.SCHEDULE) weeklyMealResponseFormat(mealCount)
+            else JsonParser.parseString(STRUCTURED_MEAL_RESPONSE_FORMAT).asJsonObject,
+        )
     }
 }
+
+private fun weeklyMealResponseFormat(mealCount: Int): JsonObject = JsonParser.parseString(
+    """
+    {
+      "type": "json_schema",
+      "json_schema": {
+        "name": "weekly_meal_schedule",
+        "strict": true,
+        "schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["meals"],
+          "properties": {
+            "meals": {
+              "type": "array",
+              "minItems": $mealCount,
+              "maxItems": $mealCount,
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["planned_for", "meal_type", "title", "cuisine", "servings", "time_minutes", "ingredients", "steps", "safety_note"],
+                "properties": {
+                  "planned_for": {"type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"},
+                  "meal_type": {"type": "string", "enum": ["Breakfast", "Lunch", "Dinner"]},
+                  "title": {"type": "string", "maxLength": 100},
+                  "cuisine": {"type": "string", "maxLength": 40},
+                  "servings": {"type": "integer", "minimum": 1, "maximum": 20},
+                  "time_minutes": {"type": "integer", "minimum": 1, "maximum": 360},
+                  "ingredients": {
+                    "type": "array",
+                    "minItems": 1,
+                    "maxItems": 8,
+                    "items": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": ["name", "unit", "quantity"],
+                      "properties": {
+                        "name": {"type": "string", "maxLength": 120},
+                        "unit": {"type": "string", "enum": ["count", "each", "oz", "lb", "g", "kg", "ml", "l"]},
+                        "quantity": {"type": "string", "pattern": "^[0-9]+([.][0-9]{1,3})?$"}
+                      }
+                    }
+                  },
+                  "steps": {
+                    "type": "array",
+                    "minItems": 2,
+                    "maxItems": 3,
+                    "items": {"type": "string", "maxLength": 140}
+                  },
+                  "safety_note": {"type": "string", "maxLength": 100}
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+    """.trimIndent(),
+).asJsonObject
 
 private val STRUCTURED_MEAL_RESPONSE_FORMAT = """
     {

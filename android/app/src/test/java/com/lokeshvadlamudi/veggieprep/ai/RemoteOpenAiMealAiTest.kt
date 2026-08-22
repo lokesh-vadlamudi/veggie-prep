@@ -26,16 +26,41 @@ class RemoteOpenAiMealAiTest {
     }
 
     @Test
-    fun deepSeekRequestsDisableThinkingAndRequireMealSchema() {
+    fun deepSeekRequestsDisableReasoningAndRequireMealSchema() {
         val body = createRemoteRequestBody("deepseek-v4-flash-0731", "plan a meal")
 
-        assertFalse(
-            body.getAsJsonObject("chat_template_kwargs")
-                .get("enable_thinking")
-                .asBoolean,
-        )
+        assertFalse(body.has("chat_template_kwargs"))
+        assertFalse(body.has("thinking"))
+        assertEquals("none", body.get("reasoning_effort").asString)
         assertEquals(3000, body.get("max_tokens").asInt)
         assertEquals("json_schema", body.getAsJsonObject("response_format").get("type").asString)
+    }
+
+    @Test
+    fun weeklyDeepSeekRequestUsesOneLargeStrictScheduleResponse() {
+        val body = createRemoteRequestBody(
+            "deepseek-v4-flash-0731",
+            "plan the complete week",
+            MealOutputKind.SCHEDULE,
+            21,
+        )
+
+        assertEquals(6_500, body.get("max_tokens").asInt)
+        assertFalse(body.has("chat_template_kwargs"))
+        assertEquals("none", body.get("reasoning_effort").asString)
+        val responseFormat = body.getAsJsonObject("response_format")
+        assertEquals("json_schema", responseFormat.get("type").asString)
+        val meals = responseFormat.getAsJsonObject("json_schema")
+            .getAsJsonObject("schema")
+            .getAsJsonObject("properties")
+            .getAsJsonObject("meals")
+        assertEquals(21, meals.get("minItems").asInt)
+        assertEquals(21, meals.get("maxItems").asInt)
+        val mealProperties = meals.getAsJsonObject("items").getAsJsonObject("properties")
+        assertTrue(mealProperties.has("planned_for"))
+        assertTrue(mealProperties.has("meal_type"))
+        assertTrue(mealProperties.has("ingredients"))
+        assertTrue(mealProperties.has("steps"))
     }
 
     @Test

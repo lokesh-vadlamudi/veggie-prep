@@ -12,8 +12,8 @@ android {
         applicationId = "com.lokeshvadlamudi.veggieprep"
         minSdk = 26
         targetSdk = 36
-        versionCode = 15
-        versionName = "0.4.3"
+        versionCode = 16
+        versionName = "0.4.4"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 

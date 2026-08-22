@@ -40,7 +40,7 @@ Key features:
 - Editable expiry dates for existing pantry items
 - Dedicated Snacks section for available snacks
 - Expiry-first meal planning that skips expired ingredients
-- Five-meal weekly planning without double-counting pantry quantities
+- Configurable multi-day breakfast, lunch, and dinner planning in one AI request
 - Pantry quantity checks and missing-ingredient shopping list
 - Confirmed Cook & deduct pantry updates
 - Use and discard history
