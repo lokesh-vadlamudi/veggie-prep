@@ -122,20 +122,25 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    fun updateExpiry(item: PantryItem, expiresOn: String) {
+    fun updateItemDetails(item: PantryItem, expiresOn: String, icon: String) {
         val normalized = expiresOn.trim()
         if (normalized.isNotEmpty() && runCatching { LocalDate.parse(normalized) }.isFailure) {
             showError("Enter the expiry date as YYYY-MM-DD, or clear it.")
             return
         }
+        val normalizedIcon = icon.trim()
+        if (normalizedIcon.length > 16) {
+            showError("Choose one emoji or another short icon.")
+            return
+        }
         viewModelScope.launch(Dispatchers.IO) {
             runCatching {
-                database.updateLotExpiry(item.id, normalized)
+                database.updateLotDetails(item.id, normalized, normalizedIcon)
                 database.listPantry()
             }.onSuccess { pantry ->
                 mutableState.value = mutableState.value.copy(
                     pantry = pantry,
-                    status = if (normalized.isEmpty()) "Expiry removed" else "Expiry updated",
+                    status = "${item.name} updated",
                     error = null,
                 )
             }.onFailure { showError(it.safeMessage()) }

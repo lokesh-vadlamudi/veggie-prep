@@ -61,7 +61,7 @@ class LocalStoreMealFlowInstrumentedTest {
         assertTrue(store.listShopping().isEmpty())
     }
 
-    @Test fun storesSnackCategoryAndAllowsExpiryToBeChangedOrCleared() {
+    @Test fun storesSnackCategoryAndAllowsExpiryAndIconEdits() {
         val lotId = store.addLot(
             name = "Potato chips",
             quantityMilli = 200_000,
@@ -73,10 +73,12 @@ class LocalStoreMealFlowInstrumentedTest {
         )
 
         assertEquals("Snacks", store.listPantry().single().category)
-        store.updateLotExpiry(lotId, "2026-09-15")
+        store.updateLotDetails(lotId, "2026-09-15", "🍿")
         assertEquals("2026-09-15", store.listPantry().single().expiresOn)
-        store.updateLotExpiry(lotId, "")
+        assertEquals("🍿", store.listPantry().single().icon)
+        store.updateLotDetails(lotId, "", "")
         assertEquals(null, store.listPantry().single().expiresOn)
+        assertEquals(null, store.listPantry().single().icon)
     }
 
     @Test fun savesAWeeklyPlanAndLinksMealsToTheirDaysAtomically() {

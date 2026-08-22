@@ -13,7 +13,7 @@ import java.util.UUID
 class LocalStore(
     context: Context,
     databaseName: String = "veggie_prep.db",
-) : SQLiteOpenHelper(context, databaseName, null, 5) {
+) : SQLiteOpenHelper(context, databaseName, null, 6) {
     private val gson = Gson()
 
     override fun onCreate(db: SQLiteDatabase) {
@@ -32,6 +32,7 @@ class LocalStore(
                 quantity_estimated INTEGER NOT NULL DEFAULT 0,
                 source TEXT NOT NULL DEFAULT 'manual',
                 source_ref INTEGER,
+                icon TEXT,
                 created_at INTEGER NOT NULL
             )
             """.trimIndent(),
@@ -105,6 +106,9 @@ class LocalStore(
             db.execSQL("ALTER TABLE meals ADD COLUMN plan_id INTEGER")
             db.execSQL("ALTER TABLE meals ADD COLUMN planned_for TEXT")
             createWeeklyPlanTable(db)
+        }
+        if (oldVersion < 6) {
+            db.execSQL("ALTER TABLE stock_lots ADD COLUMN icon TEXT")
         }
     }
 
@@ -246,11 +250,28 @@ class LocalStore(
         require(updated == 1) { "That pantry item is no longer available." }
     }
 
+    fun updateLotDetails(lotId: Long, expiresOn: String?, icon: String?) {
+        val normalizedIcon = icon?.trim().orEmpty()
+        require(normalizedIcon.length <= 16) { "Choose one short icon." }
+        val updated = writableDatabase.update(
+            "stock_lots",
+            ContentValues().apply {
+                val normalizedExpiry = expiresOn?.trim().orEmpty()
+                if (normalizedExpiry.isEmpty()) putNull("expires_on") else put("expires_on", normalizedExpiry)
+                put("expiry_estimated", 0)
+                if (normalizedIcon.isEmpty()) putNull("icon") else put("icon", normalizedIcon)
+            },
+            "id = ?",
+            arrayOf(lotId.toString()),
+        )
+        require(updated == 1) { "That pantry item is no longer available." }
+    }
+
     fun listPantry(): List<PantryItem> {
         val sql = """
             SELECT l.id, l.name, l.unit, l.location, l.category, l.purchased_on, l.expires_on,
                    l.expiry_estimated, l.quantity_estimated, l.source, l.source_ref,
-                   COALESCE(SUM(e.quantity_milli), 0) AS balance
+                   l.icon, COALESCE(SUM(e.quantity_milli), 0) AS balance
             FROM stock_lots l
             LEFT JOIN inventory_events e ON e.lot_id = l.id
             GROUP BY l.id
@@ -274,7 +295,8 @@ class LocalStore(
                             quantityEstimated = cursor.getInt(8) != 0,
                             source = cursor.getString(9),
                             sourceRef = cursor.getLongOrNull(10),
-                            quantityMilli = cursor.getLong(11),
+                            icon = cursor.getStringOrNull(11),
+                            quantityMilli = cursor.getLong(12),
                         ),
                     )
                 }
