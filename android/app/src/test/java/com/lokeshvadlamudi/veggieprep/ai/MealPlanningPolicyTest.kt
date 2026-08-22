@@ -82,6 +82,21 @@ class MealPlanningPolicyTest {
         assertEquals(listOf(200_000L, 50_000L), result.allocations.map { it.quantityMilli })
     }
 
+    @Test fun convertsPoundsAndOuncesToGrams() {
+        val potatoes = pantry(6, "Potatoes", 5_000, "lb", "2026-08-24")
+        val result = MealPlanningPolicy.reconcile(
+            meal = meal(MealIngredient("Potatoes", "oz", 16_000)),
+            pantry = listOf(potatoes),
+            requiredItem = potatoes,
+            requestedServings = 2,
+            maxMinutes = 30,
+            today = today,
+        )
+
+        assertEquals(1_000L, result.allocations.single().quantityMilli)
+        assertTrue(result.missingIngredients.isEmpty())
+    }
+
     private fun meal(vararg ingredients: MealIngredient) = MealProposal(
         title = "Test meal",
         servings = 2,

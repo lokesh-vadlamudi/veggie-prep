@@ -94,14 +94,20 @@ object MealPlanningPolicy {
     }
 
     private fun unitFamily(unit: String): String = when (unit) {
-        "g", "kg" -> "mass"
+        "g", "kg", "oz", "lb" -> "mass"
         "ml", "l" -> "volume"
         "count", "each" -> "count"
         else -> unit
     }
 
     private fun factor(unit: String): Long = when (unit) {
-        "kg", "l" -> 1_000L
+        // Mass uses picograms, preserving the exact 16 oz = 1 lb relationship.
+        "g" -> 1_000_000_000L
+        "kg" -> 1_000_000_000_000L
+        "oz" -> 28_349_523_125L
+        "lb" -> 453_592_370_000L
+        "ml" -> 1_000L
+        "l" -> 1_000_000L
         else -> 1L
     }
 

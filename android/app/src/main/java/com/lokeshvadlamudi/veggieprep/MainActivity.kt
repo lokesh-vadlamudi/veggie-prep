@@ -518,7 +518,7 @@ private fun ReceiptCandidateEditDialog(
                     singleLine = true,
                 )
                 Text("Unit", style = MaterialTheme.typography.labelLarge)
-                ChoiceRow(listOf("count", "each", "g", "kg", "ml", "l"), unit) { unit = it }
+                ChoiceRow(FoodUnitOptions, unit) { unit = it }
                 Text("Stored in", style = MaterialTheme.typography.labelLarge)
                 ChoiceRow(listOf("fridge", "pantry", "freezer"), location) { location = it }
                 OutlinedTextField(
@@ -687,7 +687,7 @@ private fun QuickAddDialog(
                         singleLine = true,
                     )
                     Text("Unit", style = MaterialTheme.typography.labelLarge)
-                    ChoiceRow(listOf("count", "each", "g", "kg", "ml", "l"), unit) { unit = it }
+                    ChoiceRow(FoodUnitOptions, unit) { unit = it }
                     Text("Stored in", style = MaterialTheme.typography.labelLarge)
                     ChoiceRow(listOf("fridge", "pantry", "freezer"), location) { location = it }
                     OutlinedTextField(
@@ -1262,6 +1262,7 @@ private fun providerLabel(settings: AiSettings): String = when (settings.provide
 }
 
 private val Cream = Color(0xFFF5F2E9)
+private val FoodUnitOptions = listOf("count", "each", "oz", "lb", "g", "kg", "ml", "l")
 private val Leaf = Color(0xFF2E7D32)
 private val PaleGreen = Color(0xFFE5F2E3)
 private val Muted = Color(0xFF5D6B61)

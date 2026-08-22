@@ -112,7 +112,7 @@ private val QWEN_MEAL_RESPONSE_FORMAT = """
                 "required": ["name", "unit", "quantity"],
                 "properties": {
                   "name": {"type": "string", "maxLength": 200},
-                  "unit": {"type": "string", "enum": ["count", "each", "g", "kg", "ml", "l"]},
+                  "unit": {"type": "string", "enum": ["count", "each", "oz", "lb", "g", "kg", "ml", "l"]},
                   "quantity": {"type": "string", "pattern": "^[0-9]+([.][0-9]{1,3})?$"}
                 }
               }

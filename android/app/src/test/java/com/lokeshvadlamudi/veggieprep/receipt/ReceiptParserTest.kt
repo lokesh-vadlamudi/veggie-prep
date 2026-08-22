@@ -38,8 +38,8 @@ class ReceiptParserTest {
         assertEquals(8, draft.includedCount)
 
         val potatoes = draft.candidates.first { it.name == "Potatoes" }
-        assertEquals("g", potatoes.unit)
-        assertEquals(2_267_962L, potatoes.quantityMilli)
+        assertEquals("lb", potatoes.unit)
+        assertEquals(5_000L, potatoes.quantityMilli)
         assertFalse(potatoes.quantityEstimated)
 
         val chimichurri = draft.candidates.first { it.name == "Chimichurri sauce" }
@@ -48,8 +48,8 @@ class ReceiptParserTest {
         assertTrue(chimichurri.quantityEstimated)
 
         val peppers = draft.candidates.first { it.name == "Mini sweet peppers" }
-        assertEquals("g", peppers.unit)
-        assertEquals(453_592L, peppers.quantityMilli)
+        assertEquals("lb", peppers.unit)
+        assertEquals(1_000L, peppers.quantityMilli)
 
         val sweetPotatoes = draft.candidates.first { it.name == "Sweet potato" }
         assertEquals("count", sweetPotatoes.unit)

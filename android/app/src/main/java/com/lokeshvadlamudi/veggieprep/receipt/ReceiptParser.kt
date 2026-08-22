@@ -7,7 +7,6 @@ import java.security.MessageDigest
 import java.time.LocalDate
 import java.util.Locale
 import java.util.UUID
-import kotlin.math.roundToLong
 
 object ReceiptParser {
     private val moneyAtEnd = Regex("""^(.*?)\s+(?:[${'$'}S]\s*)?-?\d+\s*[.,]\s*\d{2}[A-Z]?$""", RegexOption.IGNORE_CASE)
@@ -256,18 +255,18 @@ object ReceiptParser {
     private fun detectedPackageSize(label: String, expectedUnit: String): Pair<Long, String>? {
         if (Regex("\\bEACH\\b", RegexOption.IGNORE_CASE).containsMatchIn(label)) return 1_000L to "count"
         val match = packageSize.find(label) ?: return null
-        val number = match.groupValues[1].toDoubleOrNull() ?: return null
+        val quantity = parseMilli(match.groupValues[1]) ?: return null
         return when (match.groupValues[2].uppercase(Locale.ROOT)) {
-            "LB", "LBS" -> (number * 453.59237 * 1_000).roundToLong() to "g"
-            "OZ" -> (number * 28.349523125 * 1_000).roundToLong() to "g"
-            "KG" -> (number * 1_000).roundToLong() to "kg"
-            "G" -> (number * 1_000).roundToLong() to "g"
+            "LB", "LBS" -> quantity to "lb"
+            "OZ" -> quantity to "oz"
+            "KG" -> quantity to "kg"
+            "G" -> quantity to "g"
             "L" -> if (expectedUnit in setOf("g", "kg")) {
-                (number * 453.59237 * 1_000).roundToLong() to "g"
+                quantity to "lb"
             } else {
-                (number * 1_000).roundToLong() to "l"
+                quantity to "l"
             }
-            "ML" -> (number * 1_000).roundToLong() to "ml"
+            "ML" -> quantity to "ml"
             else -> null
         }
     }

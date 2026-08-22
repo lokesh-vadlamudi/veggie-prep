@@ -27,4 +27,15 @@ class MealParserTest {
             "steps":["Cook."],"ingredients":[{"name":"Salt","unit":"pinch","quantity":"1"}]}"""
         assertThrows(IllegalArgumentException::class.java) { MealParser.parse(invalid, "test") }
     }
+
+    @Test fun acceptsUsWeightUnits() {
+        val meal = MealParser.parse(
+            """{"title":"Roasted potatoes","servings":2,"time_minutes":30,
+                "steps":["Roast."],"ingredients":[{"name":"Potatoes","unit":"lb","quantity":"1.5"}]}""",
+            "test",
+        )
+
+        assertEquals("lb", meal.ingredients.single().unit)
+        assertEquals(1_500L, meal.ingredients.single().quantityMilli)
+    }
 }

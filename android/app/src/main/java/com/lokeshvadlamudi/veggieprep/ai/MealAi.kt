@@ -45,7 +45,7 @@ object MealPrompt {
               "substitutions": ["optional swaps"],
               "safety_note": "short safety note or empty string",
               "rationale": "why this meal fits",
-              "ingredients": [{"name":"ingredient", "unit":"count|each|g|kg|ml|l", "quantity":"number with at most 3 decimals"}]
+              "ingredients": [{"name":"ingredient", "unit":"count|each|oz|lb|g|kg|ml|l", "quantity":"number with at most 3 decimals"}]
             }
 
             Preference: ${preference.ifBlank { "No special preference" }}
@@ -68,7 +68,7 @@ object MealParser {
         val ingredientsJson = root.getAsJsonArray("ingredients")
             ?: throw IllegalArgumentException("The model did not return ingredients.")
         require(ingredientsJson.size() in 1..40) { "The model returned an invalid ingredient list." }
-        val allowedUnits = setOf("count", "each", "g", "kg", "ml", "l")
+        val allowedUnits = setOf("count", "each", "oz", "lb", "g", "kg", "ml", "l")
         val ingredients = ingredientsJson.map { element ->
             val item = element.asJsonObject
             val name = item.requiredString("name", 200)

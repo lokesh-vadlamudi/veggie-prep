@@ -35,7 +35,8 @@ class LocalStoreReceiptInstrumentedTest {
         val item = store.listPantry().single()
 
         assertEquals("Potatoes", item.name)
-        assertEquals(2_267_962L, item.quantityMilli)
+        assertEquals(5_000L, item.quantityMilli)
+        assertEquals("lb", item.unit)
         assertEquals("receipt", item.source)
         assertEquals(result.importId, item.sourceRef)
         assertEquals(true, item.expiryEstimated)
@@ -52,7 +53,7 @@ class LocalStoreReceiptInstrumentedTest {
         store.changeQuantity(item.id, 1_000, "CONSUME", "Used in test")
 
         assertThrows(IllegalArgumentException::class.java) { store.undoReceiptImport(result.importId) }
-        assertEquals(2_266_962L, store.listPantry().single().quantityMilli)
+        assertEquals(4_000L, store.listPantry().single().quantityMilli)
     }
 
     private fun draft() = ReceiptDraft(
@@ -64,8 +65,8 @@ class LocalStoreReceiptInstrumentedTest {
                 id = "potatoes",
                 rawLabel = "POTATO BAG GOLD 5 LB",
                 name = "Potatoes",
-                quantityMilli = 2_267_962,
-                unit = "g",
+                quantityMilli = 5_000,
+                unit = "lb",
                 location = "pantry",
                 category = "Vegetables",
                 expiresOn = "2026-09-12",
