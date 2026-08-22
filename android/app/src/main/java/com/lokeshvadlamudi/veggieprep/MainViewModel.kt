@@ -123,9 +123,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    fun updateItemDetails(items: List<PantryItem>, expiresOn: String, icon: String) {
+    fun updateItemDetails(items: List<PantryItem>, name: String, expiresOn: String, icon: String) {
         if (items.isEmpty()) return
-        val item = items.first()
+        val normalizedName = name.trim()
+        if (normalizedName.isEmpty() || normalizedName.length > 200) {
+            showError("Enter an item name up to 200 characters.")
+            return
+        }
         val normalized = expiresOn.trim()
         if (normalized.isNotEmpty() && runCatching { LocalDate.parse(normalized) }.isFailure) {
             showError("Enter the expiry date as YYYY-MM-DD, or clear it.")
@@ -138,12 +142,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
         viewModelScope.launch(Dispatchers.IO) {
             runCatching {
-                database.updateLotDetails(items.map(PantryItem::id), normalized, normalizedIcon)
+                database.updateLotDetails(items.map(PantryItem::id), normalizedName, normalized, normalizedIcon)
                 database.listPantry()
             }.onSuccess { pantry ->
                 mutableState.value = mutableState.value.copy(
                     pantry = pantry,
-                    status = "${item.name} updated",
+                    status = "$normalizedName updated",
                     error = null,
                 )
             }.onFailure { showError(it.safeMessage()) }

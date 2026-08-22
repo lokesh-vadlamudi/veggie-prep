@@ -73,10 +73,11 @@ class LocalStoreMealFlowInstrumentedTest {
         )
 
         assertEquals("Snacks", store.listPantry().single().category)
-        store.updateLotDetails(lotId, "2026-09-15", "🍿")
+        store.updateLotDetails(lotId, "Popcorn", "2026-09-15", "🍿")
+        assertEquals("Popcorn", store.listPantry().single().name)
         assertEquals("2026-09-15", store.listPantry().single().expiresOn)
         assertEquals("🍿", store.listPantry().single().icon)
-        store.updateLotDetails(lotId, "", "")
+        store.updateLotDetails(lotId, "Popcorn", "", "")
         assertEquals(null, store.listPantry().single().expiresOn)
         assertEquals(null, store.listPantry().single().icon)
     }

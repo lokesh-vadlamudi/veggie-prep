@@ -269,12 +269,14 @@ class LocalStore(
         require(updated == 1) { "That pantry item is no longer available." }
     }
 
-    fun updateLotDetails(lotId: Long, expiresOn: String?, icon: String?) {
-        updateLotDetails(listOf(lotId), expiresOn, icon)
+    fun updateLotDetails(lotId: Long, name: String, expiresOn: String?, icon: String?) {
+        updateLotDetails(listOf(lotId), name, expiresOn, icon)
     }
 
-    fun updateLotDetails(lotIds: List<Long>, expiresOn: String?, icon: String?) {
+    fun updateLotDetails(lotIds: List<Long>, name: String, expiresOn: String?, icon: String?) {
         require(lotIds.isNotEmpty())
+        val normalizedName = name.trim()
+        require(normalizedName.isNotEmpty() && normalizedName.length <= 200) { "Enter an item name up to 200 characters." }
         val normalizedIcon = icon?.trim().orEmpty()
         require(normalizedIcon.length <= 16) { "Choose one short icon." }
         writableDatabase.inTransaction {
@@ -282,6 +284,7 @@ class LocalStore(
                 val updated = update(
                     "stock_lots",
                     ContentValues().apply {
+                        put("name", normalizedName)
                         val normalizedExpiry = expiresOn?.trim().orEmpty()
                         if (normalizedExpiry.isEmpty()) putNull("expires_on") else put("expires_on", normalizedExpiry)
                         put("expiry_estimated", 0)

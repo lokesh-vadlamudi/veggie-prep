@@ -294,7 +294,7 @@ private fun PantryScreen(
     pantry: List<PantryItem>,
     onAdd: (String, String, String, String, String, String, String) -> Unit,
     onUse: (List<PantryItem>, String, Boolean) -> Unit,
-    onUpdateDetails: (List<PantryItem>, String, String) -> Unit,
+    onUpdateDetails: (List<PantryItem>, String, String, String) -> Unit,
     onScanReceipt: (() -> Unit)? = null,
     onChooseReceiptPhoto: (() -> Unit)? = null,
     heading: String = "Use soon",
@@ -414,8 +414,9 @@ private fun PantryScreen(
     editItems?.let { items ->
         ItemDetailsDialog(
             item = groupMatchingPantryItems(items).single().summary,
+            matchingEntries = items.size,
             onDismiss = { editItems = null },
-            onConfirm = { expiry, icon -> onUpdateDetails(items, expiry, icon); editItems = null },
+            onConfirm = { name, expiry, icon -> onUpdateDetails(items, name, expiry, icon); editItems = null },
         )
     }
 }
@@ -806,7 +807,13 @@ private fun QuantityDialog(item: PantryItem, discard: Boolean, onDismiss: () -> 
 }
 
 @Composable
-private fun ItemDetailsDialog(item: PantryItem, onDismiss: () -> Unit, onConfirm: (String, String) -> Unit) {
+private fun ItemDetailsDialog(
+    item: PantryItem,
+    matchingEntries: Int,
+    onDismiss: () -> Unit,
+    onConfirm: (String, String, String) -> Unit,
+) {
+    var name by rememberSaveable(item.id) { mutableStateOf(item.name) }
     var expires by rememberSaveable(item.id) { mutableStateOf(item.expiresOn.orEmpty()) }
     var icon by rememberSaveable(item.id) { mutableStateOf(item.icon.orEmpty()) }
     val defaultIcon = IndianIngredientCatalog.find(item.name)?.visual ?: "🧺"
@@ -818,6 +825,16 @@ private fun ItemDetailsDialog(item: PantryItem, onDismiss: () -> Unit, onConfirm
                 Modifier.verticalScroll(rememberScrollState()),
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
+                OutlinedTextField(
+                    value = name,
+                    onValueChange = { name = it.take(200) },
+                    label = { Text("Item name") },
+                    supportingText = {
+                        if (matchingEntries > 1) Text("This renames all $matchingEntries matching entries in this card.")
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true,
+                )
                 Text("Icon", style = MaterialTheme.typography.labelLarge)
                 Text("Current: ${icon.ifBlank { defaultIcon }}", style = MaterialTheme.typography.headlineMedium)
                 ChoiceRow(ItemIconOptions, icon) { icon = it }
@@ -845,7 +862,9 @@ private fun ItemDetailsDialog(item: PantryItem, onDismiss: () -> Unit, onConfirm
                 }
             }
         },
-        confirmButton = { Button(onClick = { onConfirm(expires, icon) }) { Text("Save") } },
+        confirmButton = {
+            Button(onClick = { onConfirm(name, expires, icon) }, enabled = name.isNotBlank()) { Text("Save") }
+        },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
     )
 }
