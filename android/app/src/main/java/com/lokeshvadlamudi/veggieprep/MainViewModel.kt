@@ -11,6 +11,7 @@ import com.lokeshvadlamudi.veggieprep.ai.MealParser
 import com.lokeshvadlamudi.veggieprep.ai.MealPlanningPolicy
 import com.lokeshvadlamudi.veggieprep.ai.MealPrompt
 import com.lokeshvadlamudi.veggieprep.ai.RemoteOpenAiMealAi
+import com.lokeshvadlamudi.veggieprep.ai.WeeklyMealPlanningPolicy
 import com.lokeshvadlamudi.veggieprep.data.AiProviderType
 import com.lokeshvadlamudi.veggieprep.data.AiSettings
 import com.lokeshvadlamudi.veggieprep.data.AiSettingsStore
@@ -18,6 +19,10 @@ import com.lokeshvadlamudi.veggieprep.data.LocalStore
 import com.lokeshvadlamudi.veggieprep.data.MealProposal
 import com.lokeshvadlamudi.veggieprep.data.PantryItem
 import com.lokeshvadlamudi.veggieprep.data.ShoppingItem
+import com.lokeshvadlamudi.veggieprep.data.WeeklyPlan
+import com.lokeshvadlamudi.veggieprep.receipt.ReceiptCandidate
+import com.lokeshvadlamudi.veggieprep.receipt.ReceiptDraft
+import com.lokeshvadlamudi.veggieprep.receipt.ReceiptOcr
 import java.io.File
 import java.time.LocalDate
 import kotlinx.coroutines.Dispatchers
@@ -31,6 +36,9 @@ data class AppUiState(
     val pantry: List<PantryItem> = emptyList(),
     val meals: List<MealProposal> = emptyList(),
     val shopping: List<ShoppingItem> = emptyList(),
+    val weeklyPlan: WeeklyPlan? = null,
+    val receiptDraft: ReceiptDraft? = null,
+    val lastReceiptImportId: Long? = null,
     val settings: AiSettings = AiSettings(),
     val hasApiKey: Boolean = false,
     val networkDisclosureRemembered: Boolean = false,
@@ -56,6 +64,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 pantry = database.listPantry(),
                 meals = database.listMeals(),
                 shopping = database.listShopping(),
+                weeklyPlan = database.latestWeeklyPlan(),
                 settings = settings,
                 hasApiKey = settingsStore.apiKey().isNotEmpty(),
                 networkDisclosureRemembered = settings.provider == AiProviderType.REMOTE_OPENAI &&
@@ -132,6 +141,84 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             }.onFailure { showError(it.safeMessage()) }
         }
     }
+
+    fun processReceipt(imageUris: List<Uri>) {
+        if (imageUris.isEmpty()) {
+            showError("No receipt image was returned.")
+            return
+        }
+        mutableState.value = mutableState.value.copy(
+            busy = true,
+            status = "Reading receipt on this phone…",
+            error = null,
+        )
+        viewModelScope.launch(Dispatchers.IO) {
+            runCatching { ReceiptOcr.read(getApplication(), imageUris) }
+                .onSuccess { draft ->
+                    mutableState.value = mutableState.value.copy(
+                        receiptDraft = draft,
+                        busy = false,
+                        status = "Review every grocery before importing",
+                        error = null,
+                    )
+                }
+                .onFailure { showError(it.safeMessage()) }
+        }
+    }
+
+    fun updateReceiptCandidate(candidate: ReceiptCandidate) {
+        val draft = mutableState.value.receiptDraft ?: return
+        mutableState.value = mutableState.value.copy(
+            receiptDraft = draft.copy(
+                candidates = draft.candidates.map { current ->
+                    if (current.id == candidate.id) candidate else current
+                },
+            ),
+            error = null,
+        )
+    }
+
+    fun dismissReceipt() {
+        mutableState.value = mutableState.value.copy(receiptDraft = null, error = null, status = "")
+    }
+
+    fun importReceipt() {
+        val draft = mutableState.value.receiptDraft ?: return
+        mutableState.value = mutableState.value.copy(busy = true, status = "Adding selected groceries…", error = null)
+        viewModelScope.launch(Dispatchers.IO) {
+            runCatching {
+                val result = database.importReceipt(draft)
+                result to database.listPantry()
+            }.onSuccess { (result, pantry) ->
+                mutableState.value = mutableState.value.copy(
+                    pantry = pantry,
+                    receiptDraft = null,
+                    lastReceiptImportId = result.importId,
+                    busy = false,
+                    status = "${result.addedCount} groceries added to pantry",
+                    error = null,
+                )
+            }.onFailure { showError(it.safeMessage()) }
+        }
+    }
+
+    fun undoReceiptImport(importId: Long) {
+        viewModelScope.launch(Dispatchers.IO) {
+            runCatching {
+                database.undoReceiptImport(importId)
+                database.listPantry()
+            }.onSuccess { pantry ->
+                mutableState.value = mutableState.value.copy(
+                    pantry = pantry,
+                    lastReceiptImportId = null,
+                    status = "Receipt import undone",
+                    error = null,
+                )
+            }.onFailure { showError(it.safeMessage()) }
+        }
+    }
+
+    fun reportError(message: String) = showError(message)
 
     fun saveAiSettings(settings: AiSettings, apiKey: String?) {
         runCatching {
@@ -262,6 +349,119 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    fun generateWeeklyPlan(
+        servings: Int,
+        maxMinutes: Int,
+        preference: String,
+        networkDisclosureConfirmed: Boolean,
+        rememberNetworkDisclosure: Boolean,
+    ) {
+        val snapshot = mutableState.value
+        if (snapshot.pantry.isEmpty()) {
+            showError("Add at least one pantry item before planning the week.")
+            return
+        }
+        val settings = settingsStore.load()
+        val eligiblePantry = MealPlanningPolicy.eligiblePantry(snapshot.pantry)
+        if (eligiblePantry.isEmpty()) {
+            showError("All pantry items are expired. Discard or replace them before planning the week.")
+            return
+        }
+        val disclosureRemembered = settings.provider == AiProviderType.REMOTE_OPENAI &&
+            settingsStore.isNetworkDisclosureRemembered(settings.baseUrl)
+        if (settings.provider == AiProviderType.REMOTE_OPENAI && !disclosureRemembered && !networkDisclosureConfirmed) {
+            showError("Review and confirm what will be sent to the network AI.")
+            return
+        }
+        val remoteChoiceMade = settings.provider == AiProviderType.REMOTE_OPENAI && networkDisclosureConfirmed
+        if (remoteChoiceMade) {
+            if (rememberNetworkDisclosure) settingsStore.rememberNetworkDisclosure(settings.baseUrl)
+            else settingsStore.forgetNetworkDisclosure(settings.baseUrl)
+        }
+        mutableState.value = snapshot.copy(
+            busy = true,
+            status = "Planning meal 1 of ${WeeklyMealPlanningPolicy.DEFAULT_MEAL_COUNT}…",
+            error = null,
+            networkDisclosureRemembered = if (remoteChoiceMade) rememberNetworkDisclosure else disclosureRemembered,
+        )
+        viewModelScope.launch {
+            runCatching {
+                val provider = providerFor(settings)
+                val weekStart = WeeklyMealPlanningPolicy.nextWeekStart()
+                val plannedMeals = mutableListOf<MealProposal>()
+                repeat(WeeklyMealPlanningPolicy.DEFAULT_MEAL_COUNT) { index ->
+                    mutableState.value = mutableState.value.copy(
+                        status = "Planning meal ${index + 1} of ${WeeklyMealPlanningPolicy.DEFAULT_MEAL_COUNT}…",
+                    )
+                    val virtualPantry = WeeklyMealPlanningPolicy.remainingPantry(eligiblePantry, plannedMeals)
+                    val requiredItem = MealPlanningPolicy.requiredExpiryItem(virtualPantry)
+                    val diversity = plannedMeals.joinToString { it.title }.takeIf { it.isNotBlank() }
+                    val dayPreference = buildString {
+                        append(preference.ifBlank { "No special preference" })
+                        append(". This is meal ${index + 1} of a weekday plan.")
+                        diversity?.let { append(" Avoid repeating these earlier meals: $it.") }
+                    }
+                    val prompt = MealPrompt.create(virtualPantry, servings, maxMinutes, dayPreference, requiredItem)
+                    val raw = provider.generate(prompt)
+                    val proposal = MealParser.parse(raw, provider.label)
+                    plannedMeals += MealPlanningPolicy.reconcile(
+                        meal = proposal,
+                        pantry = virtualPantry,
+                        requiredItem = requiredItem,
+                        requestedServings = servings,
+                        maxMinutes = maxMinutes,
+                    ).copy(plannedFor = weekStart.plusDays(index.toLong()).toString())
+                }
+                val plan = WeeklyPlan(
+                    weekStart = weekStart.toString(),
+                    servings = servings,
+                    maxMinutes = maxMinutes,
+                    preference = preference,
+                    provider = provider.label,
+                )
+                withContext(Dispatchers.IO) {
+                    database.saveWeeklyPlan(plan, plannedMeals)
+                    database.latestWeeklyPlan() to database.listMeals()
+                }
+            }.onSuccess { (plan, meals) ->
+                mutableState.value = mutableState.value.copy(
+                    weeklyPlan = plan,
+                    meals = meals,
+                    busy = false,
+                    status = "Next week's meal plan is ready",
+                    error = null,
+                )
+            }.onFailure {
+                mutableState.value = mutableState.value.copy(busy = false, status = "", error = it.safeMessage())
+            }
+        }
+    }
+
+    fun addWeeklyMissingToShopping() {
+        val plan = mutableState.value.weeklyPlan ?: run {
+            showError("Create a weekly plan first.")
+            return
+        }
+        val plannedMeals = mutableState.value.meals.filter { it.planId == plan.id }
+        val missing = WeeklyMealPlanningPolicy.combinedMissing(plannedMeals)
+        if (missing.isEmpty()) {
+            showError("This weekly plan has no missing ingredients.")
+            return
+        }
+        viewModelScope.launch(Dispatchers.IO) {
+            runCatching {
+                database.addShoppingItems(missing)
+                database.listShopping()
+            }.onSuccess { shopping ->
+                mutableState.value = mutableState.value.copy(
+                    shopping = shopping,
+                    status = "Weekly ingredients added to shopping",
+                    error = null,
+                )
+            }.onFailure { showError(it.safeMessage()) }
+        }
+    }
+
     fun cookMeal(meal: MealProposal) {
         viewModelScope.launch(Dispatchers.IO) {
             runCatching {
@@ -324,7 +524,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun clearMessage() {
-        mutableState.value = mutableState.value.copy(error = null, status = "")
+        mutableState.value = mutableState.value.copy(error = null, status = "", lastReceiptImportId = null)
     }
 
     private fun providerFor(settings: AiSettings): MealAi = when (settings.provider) {

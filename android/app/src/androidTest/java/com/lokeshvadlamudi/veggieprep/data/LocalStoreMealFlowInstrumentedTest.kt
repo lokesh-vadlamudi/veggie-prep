@@ -78,4 +78,38 @@ class LocalStoreMealFlowInstrumentedTest {
         store.updateLotExpiry(lotId, "")
         assertEquals(null, store.listPantry().single().expiresOn)
     }
+
+    @Test fun savesAWeeklyPlanAndLinksMealsToTheirDaysAtomically() {
+        val planId = store.saveWeeklyPlan(
+            WeeklyPlan(
+                weekStart = "2026-08-24",
+                servings = 2,
+                maxMinutes = 45,
+                preference = "vegetarian",
+                provider = "test",
+            ),
+            listOf(
+                plannedMeal("Monday meal", "2026-08-24"),
+                plannedMeal("Tuesday meal", "2026-08-25"),
+            ),
+        )
+
+        val plan = requireNotNull(store.latestWeeklyPlan())
+        val meals = store.listMeals().filter { it.planId == planId }.sortedBy { it.plannedFor }
+        assertEquals(planId, plan.id)
+        assertEquals(listOf("2026-08-24", "2026-08-25"), meals.map { it.plannedFor })
+    }
+
+    private fun plannedMeal(title: String, day: String) = MealProposal(
+        title = title,
+        servings = 2,
+        timeMinutes = 30,
+        steps = listOf("Cook."),
+        substitutions = emptyList(),
+        safetyNote = "",
+        rationale = "",
+        ingredients = listOf(MealIngredient("Spinach", "g", 100_000)),
+        provider = "test",
+        plannedFor = day,
+    )
 }

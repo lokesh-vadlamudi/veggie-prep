@@ -1,7 +1,10 @@
 package com.lokeshvadlamudi.veggieprep
 
+import android.app.Activity
 import android.os.Bundle
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.LocalActivity
+import androidx.activity.result.IntentSenderRequest
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
@@ -47,6 +50,7 @@ import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.SnackbarResult
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
@@ -78,6 +82,13 @@ import com.lokeshvadlamudi.veggieprep.data.PantryItem
 import com.lokeshvadlamudi.veggieprep.data.ShoppingItem
 import com.lokeshvadlamudi.veggieprep.data.formatMilli
 import com.lokeshvadlamudi.veggieprep.ai.MealPlanningPolicy
+import com.google.mlkit.vision.documentscanner.GmsDocumentScannerOptions
+import com.google.mlkit.vision.documentscanner.GmsDocumentScanning
+import com.google.mlkit.vision.documentscanner.GmsDocumentScanningResult
+import com.lokeshvadlamudi.veggieprep.receipt.ReceiptCandidate
+import com.lokeshvadlamudi.veggieprep.receipt.ReceiptConfidence
+import com.lokeshvadlamudi.veggieprep.receipt.ReceiptDraft
+import com.lokeshvadlamudi.veggieprep.receipt.ReceiptParser
 import java.time.LocalDate
 
 class MainActivity : ComponentActivity() {
@@ -104,6 +115,7 @@ private data class PendingMealRequest(
     val servings: Int,
     val maxMinutes: Int,
     val preference: String,
+    val weekly: Boolean = false,
 )
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -112,11 +124,57 @@ private fun VeggiePrepApp(viewModel: MainViewModel) {
     val state by viewModel.state.collectAsStateWithLifecycle()
     var section by rememberSaveable { mutableStateOf(AppSection.PANTRY) }
     val snackbar = remember { SnackbarHostState() }
+    val activity = LocalActivity.current
+    val documentScanner = remember {
+        GmsDocumentScanning.getClient(
+            GmsDocumentScannerOptions.Builder()
+                .setGalleryImportAllowed(true)
+                .setPageLimit(2)
+                .setResultFormats(GmsDocumentScannerOptions.RESULT_FORMAT_JPEG)
+                .setScannerMode(GmsDocumentScannerOptions.SCANNER_MODE_BASE_WITH_FILTER)
+                .build(),
+        )
+    }
+    val receiptScannerLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.StartIntentSenderForResult(),
+    ) { result ->
+        if (result.resultCode == Activity.RESULT_OK) {
+            val pages = GmsDocumentScanningResult.fromActivityResultIntent(result.data)
+                ?.pages
+                .orEmpty()
+                .map { it.imageUri }
+            if (pages.isEmpty()) viewModel.reportError("No receipt image was returned.")
+            else viewModel.processReceipt(pages)
+        }
+    }
+    val receiptPhotoPicker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
+        uri?.let { viewModel.processReceipt(listOf(it)) }
+    }
 
-    LaunchedEffect(state.error, state.status) {
-        val message = state.error ?: state.status.takeIf { it.isNotBlank() }
+    fun startReceiptScan() {
+        val hostActivity = activity ?: run {
+            viewModel.reportError("Could not open the receipt scanner from this screen.")
+            return
+        }
+        documentScanner.getStartScanIntent(hostActivity)
+            .addOnSuccessListener { sender ->
+                receiptScannerLauncher.launch(IntentSenderRequest.Builder(sender).build())
+            }
+            .addOnFailureListener { viewModel.reportError("Could not open the receipt scanner. ${it.message.orEmpty()}") }
+    }
+
+    LaunchedEffect(state.error, state.status, state.busy, state.lastReceiptImportId) {
+        val message = state.error ?: state.status.takeIf { !state.busy && it.isNotBlank() }
         if (message != null) {
-            snackbar.showSnackbar(message)
+            val importId = state.lastReceiptImportId
+            val result = snackbar.showSnackbar(
+                message = message,
+                actionLabel = if (importId != null) "Undo" else null,
+                withDismissAction = importId != null,
+            )
+            if (result == SnackbarResult.ActionPerformed && importId != null) {
+                viewModel.undoReceiptImport(importId)
+            }
             viewModel.clearMessage()
         }
     }
@@ -127,7 +185,7 @@ private fun VeggiePrepApp(viewModel: MainViewModel) {
                 title = {
                     Column {
                         Text("Veggie Prep", fontWeight = FontWeight.Bold)
-                        Text(section.label, style = MaterialTheme.typography.labelMedium)
+                        Text(if (state.receiptDraft != null) "Review receipt" else section.label, style = MaterialTheme.typography.labelMedium)
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = Cream),
@@ -135,7 +193,7 @@ private fun VeggiePrepApp(viewModel: MainViewModel) {
         },
         snackbarHost = { SnackbarHost(snackbar) },
         bottomBar = {
-            NavigationBar(containerColor = Color.White) {
+            if (state.receiptDraft == null) NavigationBar(containerColor = Color.White) {
                 NavigationBarItem(
                     selected = section == AppSection.PANTRY,
                     onClick = { section = AppSection.PANTRY },
@@ -176,12 +234,22 @@ private fun VeggiePrepApp(viewModel: MainViewModel) {
         containerColor = Cream,
     ) { padding ->
         Box(Modifier.fillMaxSize().padding(padding)) {
-            when (section) {
+            val receipt = state.receiptDraft
+            if (receipt != null) {
+                ReceiptReviewScreen(
+                    draft = receipt,
+                    onUpdate = viewModel::updateReceiptCandidate,
+                    onImport = viewModel::importReceipt,
+                    onCancel = viewModel::dismissReceipt,
+                )
+            } else when (section) {
                 AppSection.PANTRY -> PantryScreen(
                     pantry = state.pantry,
                     onAdd = viewModel::addItem,
                     onUse = viewModel::useItem,
                     onUpdateExpiry = viewModel::updateExpiry,
+                    onScanReceipt = ::startReceiptScan,
+                    onChooseReceiptPhoto = { receiptPhotoPicker.launch("image/*") },
                 )
                 AppSection.SNACKS -> PantryScreen(
                     pantry = state.pantry.filter { IndianIngredientCatalog.isSnack(it.name, it.category) },
@@ -197,9 +265,14 @@ private fun VeggiePrepApp(viewModel: MainViewModel) {
                 AppSection.MEALS -> MealsScreen(
                     state = state,
                     onGenerate = viewModel::generateMeal,
+                    onGenerateWeek = viewModel::generateWeeklyPlan,
                     onCook = viewModel::cookMeal,
                     onAddMissing = {
                         viewModel.addMissingToShopping(it)
+                        section = AppSection.SHOPPING
+                    },
+                    onAddWeeklyMissing = {
+                        viewModel.addWeeklyMissingToShopping()
                         section = AppSection.SHOPPING
                     },
                     openSettings = { section = AppSection.AI },
@@ -221,6 +294,8 @@ private fun PantryScreen(
     onAdd: (String, String, String, String, String, String, String) -> Unit,
     onUse: (PantryItem, String, Boolean) -> Unit,
     onUpdateExpiry: (PantryItem, String) -> Unit,
+    onScanReceipt: (() -> Unit)? = null,
+    onChooseReceiptPhoto: (() -> Unit)? = null,
     heading: String = "Use soon",
     emptyTitle: String = "Your pantry lives on this phone",
     emptyDetail: String = "Add vegetables and staples. No account or server is needed.",
@@ -228,6 +303,7 @@ private fun PantryScreen(
     snacksOnly: Boolean = false,
 ) {
     var showAdd by rememberSaveable { mutableStateOf(false) }
+    var showAddChoice by rememberSaveable { mutableStateOf(false) }
     var actionItem by remember { mutableStateOf<PantryItem?>(null) }
     var expiryItem by remember { mutableStateOf<PantryItem?>(null) }
     var discard by remember { mutableStateOf(false) }
@@ -238,7 +314,7 @@ private fun PantryScreen(
                 title = emptyTitle,
                 detail = emptyDetail,
                 button = emptyButton,
-                onClick = { showAdd = true },
+                onClick = { if (onScanReceipt == null) showAdd = true else showAddChoice = true },
             )
         } else {
             LazyColumn(
@@ -258,11 +334,43 @@ private fun PantryScreen(
             }
         }
         FloatingActionButton(
-            onClick = { showAdd = true },
+            onClick = { if (onScanReceipt == null) showAdd = true else showAddChoice = true },
             modifier = Modifier.align(Alignment.BottomEnd).padding(20.dp),
             containerColor = Leaf,
             contentColor = Color.White,
         ) { Text("+", style = MaterialTheme.typography.headlineMedium) }
+    }
+
+    if (showAddChoice && onScanReceipt != null) {
+        AlertDialog(
+            onDismissRequest = { showAddChoice = false },
+            title = { Text("Add groceries") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Button(
+                        onClick = { showAddChoice = false; onScanReceipt() },
+                        modifier = Modifier.fillMaxWidth(),
+                    ) { Text("Scan a receipt") }
+                    if (onChooseReceiptPhoto != null) {
+                        OutlinedButton(
+                            onClick = { showAddChoice = false; onChooseReceiptPhoto() },
+                            modifier = Modifier.fillMaxWidth(),
+                        ) { Text("Choose a receipt photo") }
+                    }
+                    OutlinedButton(
+                        onClick = { showAddChoice = false; showAdd = true },
+                        modifier = Modifier.fillMaxWidth(),
+                    ) { Text("Search foods or add manually") }
+                    Text(
+                        "Receipt text is read on this phone. You choose every item before it is saved.",
+                        color = Muted,
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                }
+            },
+            confirmButton = {},
+            dismissButton = { TextButton(onClick = { showAddChoice = false }) { Text("Cancel") } },
+        )
     }
 
     if (showAdd) QuickAddDialog(snacksOnly = snacksOnly, onDismiss = { showAdd = false }) { name, quantity, unit, location, purchased, expires, category ->
@@ -287,6 +395,160 @@ private fun PantryScreen(
 }
 
 @Composable
+private fun ReceiptReviewScreen(
+    draft: ReceiptDraft,
+    onUpdate: (ReceiptCandidate) -> Unit,
+    onImport: () -> Unit,
+    onCancel: () -> Unit,
+) {
+    var editing by remember { mutableStateOf<ReceiptCandidate?>(null) }
+    LazyColumn(
+        modifier = Modifier.fillMaxSize(),
+        contentPadding = androidx.compose.foundation.layout.PaddingValues(16.dp, 12.dp, 16.dp, 32.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        item {
+            Card(colors = CardDefaults.cardColors(containerColor = PaleGreen), shape = RoundedCornerShape(18.dp)) {
+                Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Text("${draft.candidates.size} grocery lines found", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
+                    Text("${draft.includedCount} selected • ${draft.needsReviewCount} need review", color = Muted)
+                    Text("Purchased ${draft.purchasedOn} • ${draft.merchant}", color = Muted)
+                    Text(
+                        "Quantities and expiry dates marked Estimated are starting points. Check the package and freshness before importing.",
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                }
+            }
+        }
+        items(draft.candidates, key = { it.id }) { candidate ->
+            Card(
+                onClick = { editing = candidate },
+                colors = CardDefaults.cardColors(containerColor = Color.White),
+                shape = RoundedCornerShape(18.dp),
+            ) {
+                Row(
+                    Modifier.fillMaxWidth().padding(12.dp),
+                    verticalAlignment = Alignment.Top,
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                ) {
+                    Checkbox(
+                        checked = candidate.included,
+                        onCheckedChange = { onUpdate(candidate.copy(included = it)) },
+                    )
+                    Text(IndianIngredientCatalog.find(candidate.name)?.visual ?: "🧾", style = MaterialTheme.typography.headlineMedium)
+                    Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                        Text(candidate.name, fontWeight = FontWeight.SemiBold)
+                        Text(
+                            "${formatMilli(candidate.quantityMilli)} ${candidate.unit}" +
+                                if (candidate.quantityEstimated) " • Estimated" else "",
+                            color = if (candidate.quantityEstimated) Muted else Leaf,
+                        )
+                        Text(
+                            buildString {
+                                append(candidate.location.replaceFirstChar(Char::uppercase))
+                                if (candidate.expiresOn.isNotBlank()) {
+                                    append(" • Expires ${candidate.expiresOn}")
+                                    if (candidate.expiryEstimated) append(" (Estimated)")
+                                }
+                            },
+                            color = Muted,
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                        Text(
+                            when (candidate.confidence) {
+                                ReceiptConfidence.HIGH -> candidate.matchReason
+                                ReceiptConfidence.REVIEW -> "Review: ${candidate.matchReason}"
+                                ReceiptConfidence.LOW -> "Not selected: ${candidate.matchReason}"
+                            },
+                            color = if (candidate.confidence == ReceiptConfidence.HIGH) Leaf else Danger,
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                        Text("Receipt: ${candidate.rawLabel}", color = Muted, style = MaterialTheme.typography.labelSmall)
+                    }
+                }
+            }
+        }
+        item {
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                OutlinedButton(onClick = onCancel, modifier = Modifier.weight(1f)) { Text("Cancel") }
+                Button(
+                    onClick = onImport,
+                    enabled = draft.includedCount > 0,
+                    modifier = Modifier.weight(1f),
+                ) { Text("Add ${draft.includedCount} items") }
+            }
+        }
+    }
+
+    editing?.let { candidate ->
+        ReceiptCandidateEditDialog(
+            candidate = candidate,
+            onDismiss = { editing = null },
+            onSave = { revised -> onUpdate(revised); editing = null },
+        )
+    }
+}
+
+@Composable
+private fun ReceiptCandidateEditDialog(
+    candidate: ReceiptCandidate,
+    onDismiss: () -> Unit,
+    onSave: (ReceiptCandidate) -> Unit,
+) {
+    var name by rememberSaveable(candidate.id) { mutableStateOf(candidate.name) }
+    var quantity by rememberSaveable(candidate.id) { mutableStateOf(formatMilli(candidate.quantityMilli)) }
+    var unit by rememberSaveable(candidate.id) { mutableStateOf(candidate.unit) }
+    var location by rememberSaveable(candidate.id) { mutableStateOf(candidate.location) }
+    var expires by rememberSaveable(candidate.id) { mutableStateOf(candidate.expiresOn) }
+    var included by rememberSaveable(candidate.id) { mutableStateOf(candidate.included) }
+    var validationError by remember(candidate.id) { mutableStateOf<String?>(null) }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Review receipt item") },
+        text = {
+            Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("Receipt: ${candidate.rawLabel}", color = Muted, style = MaterialTheme.typography.bodySmall)
+                OutlinedTextField(name, { name = it }, label = { Text("Food") }, modifier = Modifier.fillMaxWidth(), singleLine = true)
+                OutlinedTextField(
+                    quantity,
+                    { quantity = it },
+                    label = { Text("Quantity") },
+                    modifier = Modifier.fillMaxWidth(),
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                    singleLine = true,
+                )
+                Text("Unit", style = MaterialTheme.typography.labelLarge)
+                ChoiceRow(listOf("count", "each", "g", "kg", "ml", "l"), unit) { unit = it }
+                Text("Stored in", style = MaterialTheme.typography.labelLarge)
+                ChoiceRow(listOf("fridge", "pantry", "freezer"), location) { location = it }
+                OutlinedTextField(
+                    expires,
+                    { expires = it },
+                    label = { Text("Expiry date (YYYY-MM-DD, optional)") },
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true,
+                )
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Checkbox(checked = included, onCheckedChange = { included = it })
+                    Text("Add this item to pantry")
+                }
+                validationError?.let { Text(it, color = Danger) }
+            }
+        },
+        confirmButton = {
+            Button(onClick = {
+                runCatching {
+                    ReceiptParser.revise(candidate, name, quantity, unit, location, expires, included)
+                }.onSuccess(onSave).onFailure {
+                    validationError = it.message ?: "Check this item and try again."
+                }
+            }) { Text("Save") }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+    )
+}
+
+@Composable
 private fun PantryCard(item: PantryItem, onUse: () -> Unit, onEditExpiry: () -> Unit, onDiscard: () -> Unit) {
     Card(colors = CardDefaults.cardColors(containerColor = Color.White), shape = RoundedCornerShape(18.dp)) {
         Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -299,7 +561,11 @@ private fun PantryCard(item: PantryItem, onUse: () -> Unit, onEditExpiry: () -> 
             }
             Text(buildString {
                 append(item.location.replaceFirstChar(Char::uppercase))
-                item.expiresOn?.let { append("  •  Expires $it") }
+                item.expiresOn?.let {
+                    append("  •  Expires $it")
+                    if (item.expiryEstimated) append(" (Estimated)")
+                }
+                if (item.quantityEstimated) append("  •  Quantity estimated")
             }, color = Muted)
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Button(onClick = onUse) { Text("Use") }
@@ -527,8 +793,10 @@ private fun ExpiryDialog(item: PantryItem, onDismiss: () -> Unit, onConfirm: (St
 private fun MealsScreen(
     state: AppUiState,
     onGenerate: (Int, Int, String, Boolean, Boolean) -> Unit,
+    onGenerateWeek: (Int, Int, String, Boolean, Boolean) -> Unit,
     onCook: (MealProposal) -> Unit,
     onAddMissing: (MealProposal) -> Unit,
+    onAddWeeklyMissing: () -> Unit,
     openSettings: () -> Unit,
 ) {
     var servingsText by rememberSaveable { mutableStateOf("2") }
@@ -537,14 +805,16 @@ private fun MealsScreen(
     var pendingRequest by remember { mutableStateOf<PendingMealRequest?>(null) }
     var rememberNetworkDisclosure by rememberSaveable { mutableStateOf(false) }
 
-    fun requestMeal(forceDisclosure: Boolean = false) {
+    fun requestMeal(weekly: Boolean = false, forceDisclosure: Boolean = false) {
         val request = PendingMealRequest(
             servings = servingsText.toIntOrNull()?.coerceIn(1, 20) ?: 2,
             maxMinutes = minutesText.toIntOrNull()?.coerceIn(5, 360) ?: 45,
             preference = preference,
+            weekly = weekly,
         )
         if (state.pantry.isEmpty()) {
-            onGenerate(request.servings, request.maxMinutes, request.preference, false, false)
+            if (weekly) onGenerateWeek(request.servings, request.maxMinutes, request.preference, false, false)
+            else onGenerate(request.servings, request.maxMinutes, request.preference, false, false)
         } else if (
             state.settings.provider == AiProviderType.REMOTE_OPENAI &&
             (forceDisclosure || !state.networkDisclosureRemembered)
@@ -552,7 +822,8 @@ private fun MealsScreen(
             rememberNetworkDisclosure = state.networkDisclosureRemembered
             pendingRequest = request
         } else {
-            onGenerate(request.servings, request.maxMinutes, request.preference, false, false)
+            if (weekly) onGenerateWeek(request.servings, request.maxMinutes, request.preference, false, false)
+            else onGenerate(request.servings, request.maxMinutes, request.preference, false, false)
         }
     }
 
@@ -589,8 +860,12 @@ private fun MealsScreen(
                             onClick = { requestMeal() },
                             enabled = !state.busy,
                         ) { Text("Suggest a meal") }
-                        OutlinedButton(onClick = openSettings) { Text("Change AI") }
+                        OutlinedButton(
+                            onClick = { requestMeal(weekly = true) },
+                            enabled = !state.busy,
+                        ) { Text("Plan next week") }
                     }
+                    TextButton(onClick = openSettings) { Text("Change AI") }
                     if (state.settings.provider == AiProviderType.REMOTE_OPENAI) {
                         TextButton(onClick = { requestMeal(forceDisclosure = true) }) {
                             Text("Review what will be shared")
@@ -599,11 +874,30 @@ private fun MealsScreen(
                 }
             }
         }
-        if (state.meals.isEmpty()) {
+        val weeklyPlan = state.weeklyPlan
+        val weeklyMeals = state.meals.filter { it.planId == weeklyPlan?.id }.sortedBy { it.plannedFor }
+        if (weeklyPlan != null && weeklyMeals.isNotEmpty()) {
+            item {
+                Card(colors = CardDefaults.cardColors(containerColor = PaleGreen), shape = RoundedCornerShape(18.dp)) {
+                    Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text("Week of ${weeklyPlan.weekStart}", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+                        Text("${weeklyMeals.size} meals • expiry-aware pantry reservations", color = Muted)
+                        if (weeklyMeals.any { it.missingIngredients.isNotEmpty() }) {
+                            OutlinedButton(onClick = onAddWeeklyMissing) { Text("Add all missing items to shopping") }
+                        }
+                    }
+                }
+            }
+            items(weeklyMeals, key = { "weekly-${it.id}" }) { meal ->
+                MealCard(meal, onCook = { onCook(meal) }, onAddMissing = { onAddMissing(meal) })
+            }
+        }
+        val savedMeals = state.meals.filter { it.planId == null }
+        if (savedMeals.isEmpty() && weeklyMeals.isEmpty()) {
             item { Text("Generated meals will be saved here on this phone.", color = Muted, modifier = Modifier.padding(8.dp)) }
-        } else {
+        } else if (savedMeals.isNotEmpty()) {
             item { Text("Saved meals", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold) }
-            items(state.meals, key = { it.id }) { meal ->
+            items(savedMeals, key = { it.id }) { meal ->
                 MealCard(meal, onCook = { onCook(meal) }, onAddMissing = { onAddMissing(meal) })
             }
         }
@@ -621,13 +915,23 @@ private fun MealsScreen(
                 rememberNetworkDisclosure = false
             },
             onConfirm = {
-                onGenerate(
-                    request.servings,
-                    request.maxMinutes,
-                    request.preference,
-                    true,
-                    rememberNetworkDisclosure,
-                )
+                if (request.weekly) {
+                    onGenerateWeek(
+                        request.servings,
+                        request.maxMinutes,
+                        request.preference,
+                        true,
+                        rememberNetworkDisclosure,
+                    )
+                } else {
+                    onGenerate(
+                        request.servings,
+                        request.maxMinutes,
+                        request.preference,
+                        true,
+                        rememberNetworkDisclosure,
+                    )
+                }
                 pendingRequest = null
                 rememberNetworkDisclosure = false
             },
@@ -666,13 +970,20 @@ private fun NetworkMealDisclosureDialog(
                     )
                 }
                 Text(
-                    "Meal request: ${request.servings} servings, up to ${request.maxMinutes} minutes. Preference: ${request.preference.ifBlank { "none" }}.",
+                    "${if (request.weekly) "Five-meal weekday plan" else "Meal request"}: ${request.servings} servings, up to ${request.maxMinutes} minutes per meal. Preference: ${request.preference.ifBlank { "none" }}.",
                 )
                 Text(
                     "Expired items, storage locations, purchase dates, and inventory history are not sent. If configured, the API key is sent separately as an authorization header and is never included in the meal prompt.",
                     color = Muted,
                     style = MaterialTheme.typography.bodySmall,
                 )
+                if (request.weekly) {
+                    Text(
+                        "The remaining pantry snapshot is updated and sent once for each of the five meals.",
+                        color = Muted,
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                }
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Checkbox(
                         checked = rememberChoice,
@@ -682,7 +993,7 @@ private fun NetworkMealDisclosureDialog(
                 }
             }
         },
-        confirmButton = { Button(onClick = onConfirm) { Text("Send and suggest") } },
+        confirmButton = { Button(onClick = onConfirm) { Text(if (request.weekly) "Send and plan week" else "Send and suggest") } },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
     )
 }
@@ -698,6 +1009,7 @@ private fun MealCard(
     Card(colors = CardDefaults.cardColors(containerColor = Color.White), shape = RoundedCornerShape(18.dp)) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Text(meal.title, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+            meal.plannedFor?.let { Text("Planned for $it", color = Leaf, fontWeight = FontWeight.SemiBold) }
             Text("${meal.servings} servings  •  ${meal.timeMinutes} min  •  ${meal.provider}", color = Muted)
             if (rescued.isNotEmpty()) {
                 Text("Rescues soon: ${rescued.joinToString()}", color = Leaf, fontWeight = FontWeight.SemiBold)
@@ -888,8 +1200,9 @@ private fun AiSettingsScreen(
                 ) {
                     Text("Veggie Prep does not require an account and Vadlamudi Labs does not collect your pantry or meal data.")
                     Text("Pantry items, generated meals, imported models, and AI settings are stored in this app's private storage. Android cloud backup is disabled.")
+                    Text("Receipt photos are processed on the device through Android and ML Kit. Veggie Prep does not keep the original photo; only the grocery lines you approve are saved locally. Google Play services may collect limited operational diagnostics under Google's terms.")
                     Text("On-device meal generation does not send pantry data to a server.")
-                    Text("If you choose a network AI, the app shows the destination and exact pantry preview before sending. Only item names, quantities, units, expiry dates, and your meal request are sent. Storage locations, purchase dates, and inventory history remain on this phone.")
+                    Text("If you choose a network AI, the app shows the destination and exact pantry preview before sending. Only item names, quantities, units, expiry dates, and your meal request are sent. A five-meal plan makes up to five requests with the remaining pantry. Storage locations, purchase dates, and inventory history remain on this phone.")
                     Text("Any network AI provider you configure processes the data under its own privacy terms. You can remove all local data by clearing the app's storage or uninstalling it.")
                 }
             },

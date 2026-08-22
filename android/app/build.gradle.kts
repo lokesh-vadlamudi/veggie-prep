@@ -12,8 +12,8 @@ android {
         applicationId = "com.lokeshvadlamudi.veggieprep"
         minSdk = 26
         targetSdk = 36
-        versionCode = 3
-        versionName = "0.2.0"
+        versionCode = 4
+        versionName = "0.3.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
@@ -77,6 +77,8 @@ dependencies {
     implementation("com.google.code.gson:gson:2.13.2")
     implementation("com.google.mlkit:genai-prompt:1.0.0-beta2")
     implementation("com.google.ai.edge.litertlm:litertlm-android:0.16.1")
+    implementation("com.google.android.gms:play-services-mlkit-document-scanner:16.0.0")
+    implementation("com.google.android.gms:play-services-mlkit-text-recognition:19.0.1")
 
     testImplementation("junit:junit:4.13.2")
     androidTestImplementation("androidx.test.ext:junit:1.3.0")

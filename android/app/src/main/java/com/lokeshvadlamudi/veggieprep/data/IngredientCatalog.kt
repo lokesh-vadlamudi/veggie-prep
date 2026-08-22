@@ -54,7 +54,7 @@ object IndianIngredientCatalog {
         item("cucumber", "Cucumber", "🥒", "Vegetables", "2", "count", "fridge", 7, "kheera", "dosakaya", "vellarikai"),
         item("raw-banana", "Raw bananas", "🍌", "Vegetables", "2", "count", "pantry", 5, "plantain", "kachcha kela", "aratikaya", "vazhakkai"),
         item("raw-mango", "Raw mango", "🥭", "Vegetables", "2", "count", "fridge", 7, "kairi", "mamidikaya", "manga"),
-        item("sweet-potato", "Sweet potato", "🍠", "Vegetables", "500", "g", "pantry", 14, "shakarkandi", "chilakada dumpa", "sakkaravalli"),
+        item("sweet-potato", "Sweet potato", "🍠", "Vegetables", "500", "g", "pantry", 14, "shakarkandi", "chilakada dumpa", "sakkaravalli", "potato sweet"),
         item("taro-root", "Taro root", "🫜", "Vegetables", "500", "g", "pantry", 10, "arbi", "chamagadda", "seppankizhangu"),
         item("yam", "Yam", "🫜", "Vegetables", "500", "g", "pantry", 14, "suran", "kanda", "senaikizhangu"),
         item("mushroom", "Mushrooms", "🍄", "Vegetables", "200", "g", "fridge", 4, "button mushroom"),

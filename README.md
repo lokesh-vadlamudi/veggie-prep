@@ -24,8 +24,12 @@ The current Android feature set includes:
   defaults, and suggested shelf life;
 - editable pantry expiry dates, including the ability to clear an unknown date;
 - a dedicated Snacks section backed by the same local pantry inventory;
+- on-device receipt scanning and photo import with an editable, conservative
+  grocery review, estimated expiry labels, duplicate protection, and Undo;
 - expiry-first meal planning that excludes expired food and requires the
   earliest-expiring safe item in every saved suggestion;
+- a five-meal weekday plan that reserves pantry quantities across the week so
+  the same stock is not promised twice;
 - deterministic reconciliation of model quantities against real pantry lots;
 - a consolidated shopping list for ingredients a meal still needs; and
 - atomic **Cook & deduct** confirmation that rechecks and consumes the matched

@@ -35,10 +35,12 @@ inventory history are never included in the meal prompt.
 Key features:
 
 - Local-first pantry inventory
+- On-device receipt scan or photo import with review before saving
 - Offline catalog of 450+ household foods and regional aliases
 - Editable expiry dates for existing pantry items
 - Dedicated Snacks section for available snacks
 - Expiry-first meal planning that skips expired ingredients
+- Five-meal weekly planning without double-counting pantry quantities
 - Pantry quantity checks and missing-ingredient shopping list
 - Confirmed Cook & deduct pantry updates
 - Use and discard history
@@ -50,7 +52,16 @@ Key features:
 Veggie Prep is designed to make everyday meal planning simpler while keeping
 you in control of where your data goes.
 
-## Release notes — 0.2.0
+## Release notes — 0.3.0
+
+Scan a grocery receipt or choose a photo, review every recognized item, and add
+the selected groceries to your pantry in one step. Estimated quantities and
+expiry dates are clearly labeled, uncertain matches stay unchecked, duplicate
+imports are blocked, and a completed import can be undone. You can also create
+a five-meal plan for next week that prioritizes expiring ingredients and
+reserves pantry quantities across the whole plan.
+
+## Previous release — 0.2.0
 
 Quick Add now covers 450+ household foods, including breads, flatbreads, eggs,
 proteins, prepared foods, sauces, frozen items, beverages, and leftovers.
@@ -67,4 +78,7 @@ Food & Drink
 - No advertising or analytics SDKs.
 - User-initiated network AI requests go only to the endpoint configured by the
   user after a destination and data preview.
+- Receipt images are processed on-device; the original photo is not retained by
+  Veggie Prep. Recheck Google Play's Data safety answers for the limited ML Kit
+  operational metrics and diagnostics before releasing 0.3.0.
 - Pantry and meal data remain in app-private storage; Android backup is off.

@@ -1,6 +1,6 @@
 # Veggie Prep Privacy Policy
 
-Effective: August 19, 2026
+Effective: August 22, 2026
 
 Veggie Prep is published by Vadlamudi Labs. This policy explains how the
 native Android app handles information.
@@ -15,6 +15,21 @@ Pantry items, inventory history, meal suggestions, imported models, and AI
 settings are stored in the app's private storage on the device. Android cloud
 backup is disabled.
 
+## Receipt scanning
+
+When the user scans a receipt or chooses a receipt photo, Android and Google ML
+Kit process the image on the device to recognize text. Veggie Prep does not
+retain the original receipt image. Before an import, the user reviews and can
+edit or exclude every recognized grocery. Only approved pantry details,
+sanitized grocery-line labels, the merchant label, and purchase date are stored
+in private app storage; totals, payment-card details, and unrelated receipt
+metadata are not saved.
+
+Google Play services may collect limited operational metrics and diagnostics
+for the document-scanning and text-recognition APIs under Google's terms.
+Vadlamudi Labs does not receive that information and does not add its own
+analytics or advertising tracking.
+
 ## Meal generation
 
 When an on-device model is selected, meal generation remains on the device.
@@ -26,6 +41,10 @@ the destination and a preview before sending data. The request can contain:
 - quantities and units;
 - expiry dates; and
 - the requested servings, time limit, and meal preference.
+
+A weekly plan creates five meal requests. Before each request, the app removes
+quantities already reserved by earlier meals and sends the updated remaining
+pantry preview.
 
 Storage locations, purchase dates, and inventory history are not included in
 the meal prompt. If the configured service requires an API key, the key is
@@ -39,8 +58,10 @@ policies. Vadlamudi Labs does not operate or receive data from those services.
 ## Permissions and imported files
 
 The Internet permission is used only when a network AI provider is configured.
-The system document picker is used when the user chooses to import a compatible
-on-device model. Imported models are copied into private app storage.
+The system document picker is used when the user chooses a receipt photo or
+imports a compatible on-device model. The Google Play services document
+scanner provides the camera-based receipt flow without giving Veggie Prep
+broad camera access. Imported models are copied into private app storage.
 
 ## Retention and deletion
 

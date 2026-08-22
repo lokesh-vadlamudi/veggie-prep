@@ -9,6 +9,10 @@ data class PantryItem(
     val purchasedOn: String?,
     val expiresOn: String?,
     val category: String = "Other",
+    val expiryEstimated: Boolean = false,
+    val quantityEstimated: Boolean = false,
+    val source: String = "manual",
+    val sourceRef: Long? = null,
 ) {
     val quantityText: String
         get() = formatMilli(quantityMilli)
@@ -49,6 +53,18 @@ data class MealProposal(
     val missingIngredients: List<MealIngredient> = emptyList(),
     val status: MealStatus = MealStatus.SUGGESTED,
     val cookedAt: Long? = null,
+    val createdAt: Long = System.currentTimeMillis(),
+    val planId: Long? = null,
+    val plannedFor: String? = null,
+)
+
+data class WeeklyPlan(
+    val id: Long = 0,
+    val weekStart: String,
+    val servings: Int,
+    val maxMinutes: Int,
+    val preference: String,
+    val provider: String,
     val createdAt: Long = System.currentTimeMillis(),
 )
 
