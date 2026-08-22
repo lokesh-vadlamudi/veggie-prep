@@ -101,7 +101,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    fun useItem(item: PantryItem, quantityText: String, discard: Boolean) {
+    fun useItems(items: List<PantryItem>, quantityText: String, discard: Boolean) {
+        if (items.isEmpty()) return
         val quantity = com.lokeshvadlamudi.veggieprep.data.parseMilli(quantityText)
         if (quantity == null || quantity <= 0) {
             showError("Enter a positive quantity with up to 3 decimal places.")
@@ -109,8 +110,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
         viewModelScope.launch(Dispatchers.IO) {
             runCatching {
-                database.changeQuantity(
-                    lotId = item.id,
+                database.changeQuantityAcrossLots(
+                    lotIds = items.map(PantryItem::id),
                     amountMilli = quantity,
                     eventType = if (discard) "DISCARD" else "CONSUME",
                     note = if (discard) "Discarded on phone" else "Used on phone",
@@ -122,7 +123,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    fun updateItemDetails(item: PantryItem, expiresOn: String, icon: String) {
+    fun updateItemDetails(items: List<PantryItem>, expiresOn: String, icon: String) {
+        if (items.isEmpty()) return
+        val item = items.first()
         val normalized = expiresOn.trim()
         if (normalized.isNotEmpty() && runCatching { LocalDate.parse(normalized) }.isFailure) {
             showError("Enter the expiry date as YYYY-MM-DD, or clear it.")
@@ -135,7 +138,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
         viewModelScope.launch(Dispatchers.IO) {
             runCatching {
-                database.updateLotDetails(item.id, normalized, normalizedIcon)
+                database.updateLotDetails(items.map(PantryItem::id), normalized, normalizedIcon)
                 database.listPantry()
             }.onSuccess { pantry ->
                 mutableState.value = mutableState.value.copy(

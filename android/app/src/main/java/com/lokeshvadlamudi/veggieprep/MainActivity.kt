@@ -81,6 +81,7 @@ import com.lokeshvadlamudi.veggieprep.data.MealStatus
 import com.lokeshvadlamudi.veggieprep.data.PantryItem
 import com.lokeshvadlamudi.veggieprep.data.ShoppingItem
 import com.lokeshvadlamudi.veggieprep.data.formatMilli
+import com.lokeshvadlamudi.veggieprep.data.groupMatchingPantryItems
 import com.lokeshvadlamudi.veggieprep.ai.MealPlanningPolicy
 import com.google.mlkit.vision.documentscanner.GmsDocumentScannerOptions
 import com.google.mlkit.vision.documentscanner.GmsDocumentScanning
@@ -246,7 +247,7 @@ private fun VeggiePrepApp(viewModel: MainViewModel) {
                 AppSection.PANTRY -> PantryScreen(
                     pantry = state.pantry,
                     onAdd = viewModel::addItem,
-                    onUse = viewModel::useItem,
+                    onUse = viewModel::useItems,
                     onUpdateDetails = viewModel::updateItemDetails,
                     onScanReceipt = ::startReceiptScan,
                     onChooseReceiptPhoto = { receiptPhotoPicker.launch("image/*") },
@@ -254,7 +255,7 @@ private fun VeggiePrepApp(viewModel: MainViewModel) {
                 AppSection.SNACKS -> PantryScreen(
                     pantry = state.pantry.filter { IndianIngredientCatalog.isSnack(it.name, it.category) },
                     onAdd = viewModel::addItem,
-                    onUse = viewModel::useItem,
+                    onUse = viewModel::useItems,
                     onUpdateDetails = viewModel::updateItemDetails,
                     heading = "Available snacks",
                     emptyTitle = "No snacks yet",
@@ -292,8 +293,8 @@ private fun VeggiePrepApp(viewModel: MainViewModel) {
 private fun PantryScreen(
     pantry: List<PantryItem>,
     onAdd: (String, String, String, String, String, String, String) -> Unit,
-    onUse: (PantryItem, String, Boolean) -> Unit,
-    onUpdateDetails: (PantryItem, String, String) -> Unit,
+    onUse: (List<PantryItem>, String, Boolean) -> Unit,
+    onUpdateDetails: (List<PantryItem>, String, String) -> Unit,
     onScanReceipt: (() -> Unit)? = null,
     onChooseReceiptPhoto: (() -> Unit)? = null,
     heading: String = "Use soon",
@@ -304,9 +305,14 @@ private fun PantryScreen(
 ) {
     var showAdd by rememberSaveable { mutableStateOf(false) }
     var showAddChoice by rememberSaveable { mutableStateOf(false) }
-    var actionItem by remember { mutableStateOf<PantryItem?>(null) }
-    var editItem by remember { mutableStateOf<PantryItem?>(null) }
+    var search by rememberSaveable { mutableStateOf("") }
+    var actionItems by remember { mutableStateOf<List<PantryItem>?>(null) }
+    var editItems by remember { mutableStateOf<List<PantryItem>?>(null) }
     var discard by remember { mutableStateOf(false) }
+    val groupedPantry = remember(pantry) { groupMatchingPantryItems(pantry) }
+    val visibleGroups = remember(groupedPantry, search) {
+        groupedPantry.filter { it.summary.matchesPantrySearch(search) }
+    }
 
     Box(Modifier.fillMaxSize()) {
         if (pantry.isEmpty()) {
@@ -323,12 +329,32 @@ private fun PantryScreen(
                 verticalArrangement = Arrangement.spacedBy(10.dp),
             ) {
                 item { Text(heading, style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold) }
-                items(pantry, key = { it.id }) { item ->
+                item {
+                    OutlinedTextField(
+                        value = search,
+                        onValueChange = { search = it },
+                        label = { Text(if (snacksOnly) "Search snacks" else "Search pantry") },
+                        supportingText = { Text("Names, categories, storage, and regional aliases") },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true,
+                    )
+                }
+                if (visibleGroups.isEmpty()) {
+                    item {
+                        Text(
+                            "No items match “${search.trim()}”.",
+                            color = Muted,
+                            modifier = Modifier.padding(vertical = 24.dp),
+                        )
+                    }
+                }
+                items(visibleGroups, key = { it.summary.id }) { group ->
                     PantryCard(
-                        item = item,
-                        onUse = { actionItem = item; discard = false },
-                        onEdit = { editItem = item },
-                        onDiscard = { actionItem = item; discard = true },
+                        item = group.summary,
+                        matchingEntries = group.lots.size,
+                        onUse = { actionItems = group.lots; discard = false },
+                        onEdit = { editItems = group.lots },
+                        onDiscard = { actionItems = group.lots; discard = true },
                     )
                 }
             }
@@ -377,19 +403,19 @@ private fun PantryScreen(
         onAdd(name, quantity, unit, location, purchased, expires, category)
         showAdd = false
     }
-    actionItem?.let { item ->
+    actionItems?.let { items ->
         QuantityDialog(
-            item = item,
+            item = groupMatchingPantryItems(items).single().summary,
             discard = discard,
-            onDismiss = { actionItem = null },
-            onConfirm = { quantity -> onUse(item, quantity, discard); actionItem = null },
+            onDismiss = { actionItems = null },
+            onConfirm = { quantity -> onUse(items, quantity, discard); actionItems = null },
         )
     }
-    editItem?.let { item ->
+    editItems?.let { items ->
         ItemDetailsDialog(
-            item = item,
-            onDismiss = { editItem = null },
-            onConfirm = { expiry, icon -> onUpdateDetails(item, expiry, icon); editItem = null },
+            item = groupMatchingPantryItems(items).single().summary,
+            onDismiss = { editItems = null },
+            onConfirm = { expiry, icon -> onUpdateDetails(items, expiry, icon); editItems = null },
         )
     }
 }
@@ -549,7 +575,13 @@ private fun ReceiptCandidateEditDialog(
 }
 
 @Composable
-private fun PantryCard(item: PantryItem, onUse: () -> Unit, onEdit: () -> Unit, onDiscard: () -> Unit) {
+private fun PantryCard(
+    item: PantryItem,
+    matchingEntries: Int,
+    onUse: () -> Unit,
+    onEdit: () -> Unit,
+    onDiscard: () -> Unit,
+) {
     Card(colors = CardDefaults.cardColors(containerColor = Color.White), shape = RoundedCornerShape(18.dp)) {
         Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
@@ -566,6 +598,7 @@ private fun PantryCard(item: PantryItem, onUse: () -> Unit, onEdit: () -> Unit, 
                     if (item.expiryEstimated) append(" (Estimated)")
                 }
                 if (item.quantityEstimated) append("  •  Quantity estimated")
+                if (matchingEntries > 1) append("  •  $matchingEntries matching entries combined")
             }, color = Muted)
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Button(onClick = onUse) { Text("Use") }
@@ -574,6 +607,15 @@ private fun PantryCard(item: PantryItem, onUse: () -> Unit, onEdit: () -> Unit, 
             }
         }
     }
+}
+
+private fun PantryItem.matchesPantrySearch(query: String): Boolean {
+    val normalized = query.trim().lowercase()
+    if (normalized.isEmpty()) return true
+    val catalog = IndianIngredientCatalog.find(name)
+    return listOf(name, category, location, unit, catalog?.name.orEmpty())
+        .plus(catalog?.aliases.orEmpty())
+        .any { normalized in it.lowercase() }
 }
 
 @Composable

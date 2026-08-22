@@ -236,6 +236,25 @@ class LocalStore(
         }
     }
 
+    fun changeQuantityAcrossLots(lotIds: List<Long>, amountMilli: Long, eventType: String, note: String = "") {
+        require(lotIds.isNotEmpty())
+        require(eventType in setOf("CONSUME", "DISCARD"))
+        require(amountMilli > 0L)
+        writableDatabase.inTransaction {
+            var remaining = amountMilli
+            lotIds.distinct().forEach { lotId ->
+                if (remaining == 0L) return@forEach
+                val available = balanceFor(this, lotId)
+                val used = minOf(available, remaining)
+                if (used > 0L) {
+                    insertEvent(this, lotId, eventType, -used, note, System.currentTimeMillis())
+                    remaining -= used
+                }
+            }
+            require(remaining == 0L) { "Quantity cannot go below zero." }
+        }
+    }
+
     fun updateLotExpiry(lotId: Long, expiresOn: String?) {
         val updated = writableDatabase.update(
             "stock_lots",
@@ -251,20 +270,29 @@ class LocalStore(
     }
 
     fun updateLotDetails(lotId: Long, expiresOn: String?, icon: String?) {
+        updateLotDetails(listOf(lotId), expiresOn, icon)
+    }
+
+    fun updateLotDetails(lotIds: List<Long>, expiresOn: String?, icon: String?) {
+        require(lotIds.isNotEmpty())
         val normalizedIcon = icon?.trim().orEmpty()
         require(normalizedIcon.length <= 16) { "Choose one short icon." }
-        val updated = writableDatabase.update(
-            "stock_lots",
-            ContentValues().apply {
-                val normalizedExpiry = expiresOn?.trim().orEmpty()
-                if (normalizedExpiry.isEmpty()) putNull("expires_on") else put("expires_on", normalizedExpiry)
-                put("expiry_estimated", 0)
-                if (normalizedIcon.isEmpty()) putNull("icon") else put("icon", normalizedIcon)
-            },
-            "id = ?",
-            arrayOf(lotId.toString()),
-        )
-        require(updated == 1) { "That pantry item is no longer available." }
+        writableDatabase.inTransaction {
+            lotIds.distinct().forEach { lotId ->
+                val updated = update(
+                    "stock_lots",
+                    ContentValues().apply {
+                        val normalizedExpiry = expiresOn?.trim().orEmpty()
+                        if (normalizedExpiry.isEmpty()) putNull("expires_on") else put("expires_on", normalizedExpiry)
+                        put("expiry_estimated", 0)
+                        if (normalizedIcon.isEmpty()) putNull("icon") else put("icon", normalizedIcon)
+                    },
+                    "id = ?",
+                    arrayOf(lotId.toString()),
+                )
+                require(updated == 1) { "That pantry item is no longer available." }
+            }
+        }
     }
 
     fun listPantry(): List<PantryItem> {

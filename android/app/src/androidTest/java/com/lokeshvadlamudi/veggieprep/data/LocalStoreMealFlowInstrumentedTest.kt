@@ -102,6 +102,18 @@ class LocalStoreMealFlowInstrumentedTest {
         assertEquals(listOf("2026-08-24", "2026-08-25"), meals.map { it.plannedFor })
     }
 
+    @Test fun consumesACombinedDisplayQuantityAcrossMatchingLots() {
+        val first = store.addLot("Eggs", 12_000, "count", "fridge", "2026-08-22", "2026-09-19")
+        val second = store.addLot("Eggs", 12_000, "count", "fridge", "2026-08-22", "2026-09-19")
+
+        store.changeQuantityAcrossLots(listOf(first, second), 18_000, "CONSUME", "Used from grouped item")
+
+        val remaining = store.listPantry()
+        assertEquals(1, remaining.size)
+        assertEquals(second, remaining.single().id)
+        assertEquals(6_000L, remaining.single().quantityMilli)
+    }
+
     private fun plannedMeal(title: String, day: String) = MealProposal(
         title = title,
         servings = 2,
