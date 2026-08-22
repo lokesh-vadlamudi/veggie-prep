@@ -47,6 +47,9 @@ class ReceiptParserTest {
         assertEquals(500_000L, chimichurri.quantityMilli)
         assertTrue(chimichurri.quantityEstimated)
 
+        assertTrue(draft.candidates.any { it.name == "Mediterranean hummus" })
+        assertTrue(draft.candidates.any { it.name == "Roasted red pepper hummus" })
+
         val peppers = draft.candidates.first { it.name == "Mini sweet peppers" }
         assertEquals("lb", peppers.unit)
         assertEquals(1_000L, peppers.quantityMilli)

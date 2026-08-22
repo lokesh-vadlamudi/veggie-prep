@@ -601,6 +601,9 @@ private fun PantryCard(
                 if (item.quantityEstimated) append("  •  Quantity estimated")
                 if (matchingEntries > 1) append("  •  $matchingEntries matching entries combined")
             }, color = Muted)
+            item.sourceLabel
+                ?.takeIf { !it.equals(item.name, ignoreCase = true) }
+                ?.let { Text("Receipt: $it", color = Muted, style = MaterialTheme.typography.bodySmall) }
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Button(onClick = onUse) { Text("Use") }
                 TextButton(onClick = onEdit) { Text("Edit") }

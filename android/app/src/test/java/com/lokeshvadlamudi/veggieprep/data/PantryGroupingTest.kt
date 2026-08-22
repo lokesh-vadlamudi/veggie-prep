@@ -29,6 +29,17 @@ class PantryGroupingTest {
         assertEquals(3, groups.size)
     }
 
+    @Test fun keepsDifferentReceiptVariantsSeparateEvenWhenTheirStoredNamesMatch() {
+        val groups = groupMatchingPantryItems(
+            listOf(
+                pantry(1, "Hummus", "2026-09-01", 300_000).copy(sourceLabel = "HUMMUS MEDITERRANEAN"),
+                pantry(2, "Hummus", "2026-09-01", 300_000).copy(sourceLabel = "HUMMUS ROASTED RED PEPPE"),
+            ),
+        )
+
+        assertEquals(2, groups.size)
+    }
+
     private fun pantry(id: Long, name: String, expiry: String, quantity: Long) = PantryItem(
         id = id,
         name = name,

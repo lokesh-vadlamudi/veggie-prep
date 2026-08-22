@@ -14,6 +14,7 @@ data class PantryItem(
     val source: String = "manual",
     val sourceRef: Long? = null,
     val icon: String? = null,
+    val sourceLabel: String? = null,
 ) {
     val quantityText: String
         get() = formatMilli(quantityMilli)

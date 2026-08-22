@@ -13,6 +13,7 @@ fun groupMatchingPantryItems(pantry: List<PantryItem>): List<PantryGroup> = pant
             location = item.location,
             expiresOn = item.expiresOn,
             icon = item.icon ?: IndianIngredientCatalog.find(item.name)?.visual ?: "🧺",
+            sourceLabel = item.sourceLabel?.lowercase()?.trim(),
         )
     }
     .values
@@ -33,4 +34,5 @@ private data class PantryGroupKey(
     val location: String,
     val expiresOn: String?,
     val icon: String,
+    val sourceLabel: String?,
 )

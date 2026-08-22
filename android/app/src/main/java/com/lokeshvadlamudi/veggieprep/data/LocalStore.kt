@@ -13,7 +13,7 @@ import java.util.UUID
 class LocalStore(
     context: Context,
     databaseName: String = "veggie_prep.db",
-) : SQLiteOpenHelper(context, databaseName, null, 6) {
+) : SQLiteOpenHelper(context, databaseName, null, 7) {
     private val gson = Gson()
 
     override fun onCreate(db: SQLiteDatabase) {
@@ -109,6 +109,34 @@ class LocalStore(
         }
         if (oldVersion < 6) {
             db.execSQL("ALTER TABLE stock_lots ADD COLUMN icon TEXT")
+        }
+        if (oldVersion < 7) {
+            db.execSQL(
+                """
+                UPDATE stock_lots
+                SET name = 'Mediterranean hummus'
+                WHERE source = 'receipt' AND id IN (
+                    SELECT lot_id FROM receipt_import_lines
+                    WHERE lot_id IS NOT NULL
+                      AND lower(raw_label) LIKE '%hummus%'
+                      AND lower(raw_label) LIKE '%mediterranean%'
+                )
+                """.trimIndent(),
+            )
+            db.execSQL(
+                """
+                UPDATE stock_lots
+                SET name = 'Roasted red pepper hummus'
+                WHERE source = 'receipt' AND id IN (
+                    SELECT lot_id FROM receipt_import_lines
+                    WHERE lot_id IS NOT NULL
+                      AND lower(raw_label) LIKE '%hummus%'
+                      AND lower(raw_label) LIKE '%roast%'
+                      AND lower(raw_label) LIKE '%red%'
+                      AND lower(raw_label) LIKE '%pepp%'
+                )
+                """.trimIndent(),
+            )
         }
     }
 
@@ -302,9 +330,10 @@ class LocalStore(
         val sql = """
             SELECT l.id, l.name, l.unit, l.location, l.category, l.purchased_on, l.expires_on,
                    l.expiry_estimated, l.quantity_estimated, l.source, l.source_ref,
-                   l.icon, COALESCE(SUM(e.quantity_milli), 0) AS balance
+                   l.icon, r.raw_label, COALESCE(SUM(e.quantity_milli), 0) AS balance
             FROM stock_lots l
             LEFT JOIN inventory_events e ON e.lot_id = l.id
+            LEFT JOIN receipt_import_lines r ON r.lot_id = l.id
             GROUP BY l.id
             HAVING balance > 0
             ORDER BY CASE WHEN l.expires_on IS NULL THEN 1 ELSE 0 END,
@@ -327,7 +356,8 @@ class LocalStore(
                             source = cursor.getString(9),
                             sourceRef = cursor.getLongOrNull(10),
                             icon = cursor.getStringOrNull(11),
-                            quantityMilli = cursor.getLong(12),
+                            sourceLabel = cursor.getStringOrNull(12),
+                            quantityMilli = cursor.getLong(13),
                         ),
                     )
                 }
