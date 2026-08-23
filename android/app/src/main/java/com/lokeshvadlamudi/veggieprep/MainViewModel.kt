@@ -18,7 +18,9 @@ import com.lokeshvadlamudi.veggieprep.data.AiProviderType
 import com.lokeshvadlamudi.veggieprep.data.AiSettings
 import com.lokeshvadlamudi.veggieprep.data.AiSettingsStore
 import com.lokeshvadlamudi.veggieprep.data.LocalStore
+import com.lokeshvadlamudi.veggieprep.data.MealIngredient
 import com.lokeshvadlamudi.veggieprep.data.MealProposal
+import com.lokeshvadlamudi.veggieprep.data.MealStatus
 import com.lokeshvadlamudi.veggieprep.data.PantryItem
 import com.lokeshvadlamudi.veggieprep.data.ShoppingItem
 import com.lokeshvadlamudi.veggieprep.data.WeeklyPlan
@@ -291,6 +293,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         servings: Int,
         maxMinutes: Int,
         preference: String,
+        pantryOnly: Boolean,
         networkDisclosureConfirmed: Boolean,
         rememberNetworkDisclosure: Boolean,
     ) {
@@ -336,7 +339,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             runCatching {
                 val provider = providerFor(settings)
-                val prompt = MealPrompt.create(eligiblePantry, servings, maxMinutes, preference, requiredItem)
+                val prompt = MealPrompt.create(
+                    pantry = eligiblePantry,
+                    servings = servings,
+                    maxMinutes = maxMinutes,
+                    preference = preference,
+                    requiredItem = requiredItem,
+                    pantryOnly = pantryOnly,
+                )
                 val raw = provider.generate(prompt)
                 val proposal = MealParser.parse(raw, provider.label)
                 val reconciled = MealPlanningPolicy.reconcile(
@@ -345,6 +355,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     requiredItem = requiredItem,
                     requestedServings = servings,
                     maxMinutes = maxMinutes,
+                    pantryOnly = pantryOnly,
                 )
                 withContext(Dispatchers.IO) {
                     database.saveMeal(reconciled)
@@ -369,6 +380,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         days: Int,
         maxMinutes: Int,
         preference: String,
+        pantryOnly: Boolean,
         networkDisclosureConfirmed: Boolean,
         rememberNetworkDisclosure: Boolean,
     ) {
@@ -414,6 +426,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     maxMinutes = maxMinutes,
                     preference = preference,
                     schedule = schedule,
+                    pantryOnly = pantryOnly,
                 )
                 val raw = provider.generateSchedule(prompt, schedule.size)
                 val parsedMeals = WeeklyMealParser.parse(
@@ -428,6 +441,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     pantry = eligiblePantry,
                     requestedServings = servings,
                     maxMinutes = maxMinutes,
+                    pantryOnly = pantryOnly,
                 )
                 val plan = WeeklyPlan(
                     weekStart = weekStart.toString(),
@@ -491,6 +505,54 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     pantry = pantry,
                     meals = meals,
                     status = "Meal cooked and pantry quantities updated",
+                    error = null,
+                )
+            }.onFailure { showError(it.safeMessage()) }
+        }
+    }
+
+    fun updateMealIngredients(meal: MealProposal, ingredients: List<MealIngredient>) {
+        if (meal.status != MealStatus.SUGGESTED) {
+            showError("Cooked meals cannot be edited.")
+            return
+        }
+        viewModelScope.launch(Dispatchers.IO) {
+            runCatching {
+                val pantry = database.listPantry()
+                val meals = database.listMeals()
+                val currentMeal = meals.firstOrNull { it.id == meal.id }
+                    ?: throw IllegalArgumentException("That meal is no longer available.")
+                require(currentMeal.status == MealStatus.SUGGESTED) { "Cooked meals cannot be edited." }
+                require(ingredients.size == currentMeal.ingredients.size) { "The ingredient list changed. Try again." }
+                require(currentMeal.ingredients.zip(ingredients).all { (old, edited) ->
+                    old.name == edited.name && old.unit == edited.unit && edited.quantityMilli > 0
+                }) { "Only ingredient quantities can be changed." }
+
+                val otherPlanReservations = currentMeal.planId?.let { planId ->
+                    meals.filter { other ->
+                        other.id != currentMeal.id &&
+                            other.planId == planId &&
+                            other.status == MealStatus.SUGGESTED
+                    }
+                }.orEmpty()
+                val availablePantry = if (otherPlanReservations.isEmpty()) {
+                    pantry
+                } else {
+                    WeeklyMealPlanningPolicy.remainingPantry(pantry, otherPlanReservations)
+                }
+                val updatedMeal = MealPlanningPolicy.reconcile(
+                    meal = currentMeal.copy(ingredients = ingredients),
+                    pantry = availablePantry,
+                    requiredItem = null,
+                    requestedServings = currentMeal.servings,
+                    maxMinutes = currentMeal.timeMinutes,
+                )
+                database.updateMealIngredients(updatedMeal)
+                database.listMeals()
+            }.onSuccess { meals ->
+                mutableState.value = mutableState.value.copy(
+                    meals = meals,
+                    status = "Ingredient quantities and pantry deduction updated",
                     error = null,
                 )
             }.onFailure { showError(it.safeMessage()) }

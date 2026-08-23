@@ -50,6 +50,22 @@ class MealPlanningPolicyTest {
         }
     }
 
+    @Test fun pantryOnlyRejectsUnavailableIngredientsOrExcessQuantities() {
+        val failure = assertThrows(IllegalArgumentException::class.java) {
+            MealPlanningPolicy.reconcile(
+                meal = meal(MealIngredient("Tomatoes", "count", 6_000)),
+                pantry = listOf(tomatoes),
+                requiredItem = tomatoes,
+                requestedServings = 2,
+                maxMinutes = 30,
+                today = today,
+                pantryOnly = true,
+            )
+        }
+
+        assertTrue(failure.message.orEmpty().contains("unavailable pantry quantities"))
+    }
+
     @Test fun excludesExpiredLotsAndConvertsKilogramsToGrams() {
         val expired = pantry(3, "Carrots", 2_000, "count", "2026-08-18")
         val rice = pantry(4, "Rice", 1_000, "kg", "2026-09-01")

@@ -71,6 +71,7 @@ class WeeklyMealParserTest {
         assertTrue(prompt.contains("Breakfast"))
         assertTrue(prompt.contains("Lunch"))
         assertTrue(prompt.contains("Spinach"))
+        assertTrue(prompt.contains("Use ONLY ingredients listed in the pantry"))
         assertFalse(prompt.contains("secret fridge shelf"))
         assertFalse(prompt.contains("2026-08-22"))
         assertFalse(prompt.contains("private receipt label"))

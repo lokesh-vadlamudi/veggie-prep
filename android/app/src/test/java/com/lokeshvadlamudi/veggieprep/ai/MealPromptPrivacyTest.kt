@@ -27,6 +27,7 @@ class MealPromptPrivacyTest {
         assertTrue(prompt.contains("Carrots"))
         assertTrue(prompt.contains("2026-08-22"))
         assertTrue(prompt.contains("spicy"))
+        assertTrue(prompt.contains("Use ONLY ingredients listed in the pantry"))
         assertFalse(prompt.contains("location"))
         assertFalse(prompt.contains("private-freezer-label"))
         assertFalse(prompt.contains("purchased_on"))

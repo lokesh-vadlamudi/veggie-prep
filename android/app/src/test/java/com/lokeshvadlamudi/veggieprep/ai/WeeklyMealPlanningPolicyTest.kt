@@ -71,6 +71,25 @@ class WeeklyMealPlanningPolicyTest {
         assertTrue(reconciled.first().allocations.single().rescued)
     }
 
+    @Test fun pantryOnlyScheduleRejectsCumulativeOveruse() {
+        val pantry = listOf(pantry(1, "Spinach", 200_000))
+        val meals = listOf(
+            meal(ingredients = listOf(MealIngredient("Spinach", "g", 150_000))),
+            meal(ingredients = listOf(MealIngredient("Spinach", "g", 100_000))),
+        )
+
+        org.junit.Assert.assertThrows(IllegalArgumentException::class.java) {
+            WeeklyMealPlanningPolicy.reconcileSchedule(
+                meals = meals,
+                pantry = pantry,
+                requestedServings = 2,
+                maxMinutes = 30,
+                today = java.time.LocalDate.parse("2026-08-23"),
+                pantryOnly = true,
+            )
+        }
+    }
+
     private fun pantry(id: Long, name: String, quantity: Long, unit: String = "g") = PantryItem(
         id = id,
         name = name,

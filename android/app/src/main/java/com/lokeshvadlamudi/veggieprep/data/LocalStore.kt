@@ -375,6 +375,34 @@ class LocalStore(
 
     fun saveMeal(meal: MealProposal): Long = insertMeal(writableDatabase, meal)
 
+    fun updateMealIngredients(meal: MealProposal) {
+        require(meal.id > 0) { "That meal is no longer available." }
+        require(meal.ingredients.isNotEmpty() && meal.ingredients.all { it.quantityMilli > 0 }) {
+            "Every ingredient needs a quantity greater than zero."
+        }
+        writableDatabase.inTransaction {
+            val status = rawQuery(
+                "SELECT status FROM meals WHERE id = ?",
+                arrayOf(meal.id.toString()),
+            ).use { cursor ->
+                require(cursor.moveToFirst()) { "That meal is no longer available." }
+                cursor.getString(0)
+            }
+            require(status == "suggested") { "Cooked meals cannot be edited." }
+            val changed = update(
+                "meals",
+                ContentValues().apply {
+                    put("ingredients_json", gson.toJson(meal.ingredients))
+                    put("allocations_json", gson.toJson(meal.allocations))
+                    put("missing_json", gson.toJson(meal.missingIngredients))
+                },
+                "id = ?",
+                arrayOf(meal.id.toString()),
+            )
+            require(changed == 1) { "That meal could not be updated." }
+        }
+    }
+
     fun saveWeeklyPlan(plan: WeeklyPlan, meals: List<MealProposal>): Long = writableDatabase.inTransaction {
         require(meals.isNotEmpty()) { "A weekly plan needs at least one meal." }
         require(plan.mealsPerDay in 1..3 && plan.daysCount in 1..14) { "Choose 1–3 meals per day and 1–14 days." }

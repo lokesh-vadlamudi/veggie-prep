@@ -148,6 +148,29 @@ class LocalStoreMealFlowInstrumentedTest {
         assertEquals(300_000L, store.listPantry().single().quantityMilli)
     }
 
+    @Test fun editedIngredientQuantityControlsTheCookDeduction() {
+        val lotId = store.addLot("Eggs", 12_000, "count", "fridge", "2026-08-22", "2026-09-19")
+        val mealId = store.saveMeal(
+            plannedMeal("Egg breakfast", "2026-08-24", "Breakfast").copy(
+                ingredients = listOf(MealIngredient("Eggs", "count", 6_000)),
+                allocations = listOf(MealAllocation(lotId, "Eggs", "count", 6_000, "2026-09-19", false)),
+            ),
+        )
+        val saved = store.listMeals().single { it.id == mealId }
+        store.updateMealIngredients(
+            saved.copy(
+                ingredients = listOf(MealIngredient("Eggs", "count", 3_000)),
+                allocations = listOf(MealAllocation(lotId, "Eggs", "count", 3_000, "2026-09-19", false)),
+            ),
+        )
+
+        val edited = store.listMeals().single()
+        assertEquals(3_000L, edited.ingredients.single().quantityMilli)
+        assertEquals(3_000L, edited.allocations.single().quantityMilli)
+        store.cookMeal(mealId)
+        assertEquals(9_000L, store.listPantry().single().quantityMilli)
+    }
+
     @Test fun consumesACombinedDisplayQuantityAcrossMatchingLots() {
         val first = store.addLot("Eggs", 12_000, "count", "fridge", "2026-08-22", "2026-09-19")
         val second = store.addLot("Eggs", 12_000, "count", "fridge", "2026-08-22", "2026-09-19")

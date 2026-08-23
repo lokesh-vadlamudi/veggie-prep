@@ -77,12 +77,14 @@ import com.lokeshvadlamudi.veggieprep.data.AiProviderType
 import com.lokeshvadlamudi.veggieprep.data.AiSettings
 import com.lokeshvadlamudi.veggieprep.data.CatalogIngredient
 import com.lokeshvadlamudi.veggieprep.data.IndianIngredientCatalog
+import com.lokeshvadlamudi.veggieprep.data.MealIngredient
 import com.lokeshvadlamudi.veggieprep.data.MealProposal
 import com.lokeshvadlamudi.veggieprep.data.MealStatus
 import com.lokeshvadlamudi.veggieprep.data.PantryItem
 import com.lokeshvadlamudi.veggieprep.data.ShoppingItem
 import com.lokeshvadlamudi.veggieprep.data.formatMilli
 import com.lokeshvadlamudi.veggieprep.data.groupMatchingPantryItems
+import com.lokeshvadlamudi.veggieprep.data.parseMilli
 import com.lokeshvadlamudi.veggieprep.ai.MealPlanningPolicy
 import com.google.mlkit.vision.documentscanner.GmsDocumentScannerOptions
 import com.google.mlkit.vision.documentscanner.GmsDocumentScanning
@@ -117,6 +119,7 @@ private data class PendingMealRequest(
     val servings: Int,
     val maxMinutes: Int,
     val preference: String,
+    val pantryOnly: Boolean,
     val weekly: Boolean = false,
     val mealsPerDay: Int = 1,
     val days: Int = 1,
@@ -271,6 +274,7 @@ private fun VeggiePrepApp(viewModel: MainViewModel) {
                     onGenerate = viewModel::generateMeal,
                     onGenerateWeek = viewModel::generateWeeklyPlan,
                     onCook = viewModel::cookMeal,
+                    onEditIngredients = viewModel::updateMealIngredients,
                     onDelete = viewModel::deleteMeal,
                     onAddMissing = {
                         viewModel.addMissingToShopping(it)
@@ -901,9 +905,10 @@ private fun ItemDetailsDialog(
 @Composable
 private fun MealsScreen(
     state: AppUiState,
-    onGenerate: (Int, Int, String, Boolean, Boolean) -> Unit,
-    onGenerateWeek: (Int, Int, Int, Int, String, Boolean, Boolean) -> Unit,
+    onGenerate: (Int, Int, String, Boolean, Boolean, Boolean) -> Unit,
+    onGenerateWeek: (Int, Int, Int, Int, String, Boolean, Boolean, Boolean) -> Unit,
     onCook: (MealProposal) -> Unit,
+    onEditIngredients: (MealProposal, List<MealIngredient>) -> Unit,
     onDelete: (MealProposal) -> Unit,
     onAddMissing: (MealProposal) -> Unit,
     onAddWeeklyMissing: () -> Unit,
@@ -915,6 +920,7 @@ private fun MealsScreen(
     var minutesText by rememberSaveable { mutableStateOf("45") }
     var cuisines by rememberSaveable { mutableStateOf("Indian, Italian, Mexican, Mediterranean") }
     var preference by rememberSaveable { mutableStateOf("") }
+    var pantryOnly by rememberSaveable { mutableStateOf(true) }
     var pendingRequest by remember { mutableStateOf<PendingMealRequest?>(null) }
     var rememberNetworkDisclosure by rememberSaveable { mutableStateOf(false) }
 
@@ -930,13 +936,14 @@ private fun MealsScreen(
             servings = servingsText.toIntOrNull()?.coerceIn(1, 20) ?: 3,
             maxMinutes = minutesText.toIntOrNull()?.coerceIn(5, 360) ?: 45,
             preference = combinedPreference,
+            pantryOnly = pantryOnly,
             weekly = weekly,
             mealsPerDay = if (weekly) mealsPerDayText.toIntOrNull()?.coerceIn(1, 3) ?: 3 else 1,
             days = if (weekly) daysText.toIntOrNull()?.coerceIn(1, 14) ?: 7 else 1,
         )
         if (state.pantry.isEmpty()) {
-            if (weekly) onGenerateWeek(request.servings, request.mealsPerDay, request.days, request.maxMinutes, request.preference, false, false)
-            else onGenerate(request.servings, request.maxMinutes, request.preference, false, false)
+            if (weekly) onGenerateWeek(request.servings, request.mealsPerDay, request.days, request.maxMinutes, request.preference, request.pantryOnly, false, false)
+            else onGenerate(request.servings, request.maxMinutes, request.preference, request.pantryOnly, false, false)
         } else if (
             state.settings.provider == AiProviderType.REMOTE_OPENAI &&
             (forceDisclosure || !state.networkDisclosureRemembered)
@@ -944,8 +951,8 @@ private fun MealsScreen(
             rememberNetworkDisclosure = state.networkDisclosureRemembered
             pendingRequest = request
         } else {
-            if (weekly) onGenerateWeek(request.servings, request.mealsPerDay, request.days, request.maxMinutes, request.preference, false, false)
-            else onGenerate(request.servings, request.maxMinutes, request.preference, false, false)
+            if (weekly) onGenerateWeek(request.servings, request.mealsPerDay, request.days, request.maxMinutes, request.preference, request.pantryOnly, false, false)
+            else onGenerate(request.servings, request.maxMinutes, request.preference, request.pantryOnly, false, false)
         }
     }
 
@@ -1002,7 +1009,26 @@ private fun MealsScreen(
                         modifier = Modifier.fillMaxWidth(),
                         singleLine = true,
                     )
-                    OutlinedTextField(preference, { preference = it }, label = { Text("Preference (optional)") }, modifier = Modifier.fillMaxWidth())
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Checkbox(checked = pantryOnly, onCheckedChange = { pantryOnly = it })
+                        Column {
+                            Text("Use only pantry ingredients", fontWeight = FontWeight.SemiBold)
+                            Text(
+                                if (pantryOnly) "No unavailable ingredients will be accepted." else "Unavailable ingredients can be added to Shopping.",
+                                color = Muted,
+                                style = MaterialTheme.typography.bodySmall,
+                            )
+                        }
+                    }
+                    OutlinedTextField(
+                        preference,
+                        { preference = it },
+                        label = { Text("Custom instructions (optional)") },
+                        supportingText = { Text("Example: high protein, no dairy, mild spice, or use hummus today") },
+                        modifier = Modifier.fillMaxWidth(),
+                        minLines = 2,
+                        maxLines = 4,
+                    )
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         Button(
                             onClick = { requestMeal() },
@@ -1046,6 +1072,7 @@ private fun MealsScreen(
                 MealCard(
                     meal,
                     onCook = { onCook(meal) },
+                    onEditIngredients = { onEditIngredients(meal, it) },
                     onDelete = { onDelete(meal) },
                     onAddMissing = { onAddMissing(meal) },
                 )
@@ -1060,6 +1087,7 @@ private fun MealsScreen(
                 MealCard(
                     meal,
                     onCook = { onCook(meal) },
+                    onEditIngredients = { onEditIngredients(meal, it) },
                     onDelete = { onDelete(meal) },
                     onAddMissing = { onAddMissing(meal) },
                 )
@@ -1086,6 +1114,7 @@ private fun MealsScreen(
                         request.days,
                         request.maxMinutes,
                         request.preference,
+                        request.pantryOnly,
                         true,
                         rememberNetworkDisclosure,
                     )
@@ -1094,6 +1123,7 @@ private fun MealsScreen(
                         request.servings,
                         request.maxMinutes,
                         request.preference,
+                        request.pantryOnly,
                         true,
                         rememberNetworkDisclosure,
                     )
@@ -1137,10 +1167,15 @@ private fun NetworkMealDisclosureDialog(
                 }
                 Text(
                     if (request.weekly) {
-                        "${request.days}-day plan: ${request.mealsPerDay} meals/day for ${request.servings} people, up to ${request.maxMinutes} minutes per meal. Preference: ${request.preference.ifBlank { "none" }}."
+                        "${request.days}-day plan: ${request.mealsPerDay} meals/day for ${request.servings} people, up to ${request.maxMinutes} minutes per meal. Custom instructions: ${request.preference.ifBlank { "none" }}."
                     } else {
-                        "Meal request: ${request.servings} servings, up to ${request.maxMinutes} minutes. Preference: ${request.preference.ifBlank { "none" }}."
+                        "Meal request: ${request.servings} servings, up to ${request.maxMinutes} minutes. Custom instructions: ${request.preference.ifBlank { "none" }}."
                     },
+                )
+                Text(
+                    if (request.pantryOnly) "Pantry-only is on: the app will reject any unavailable ingredient or excess quantity."
+                    else "Pantry-only is off: unavailable ingredients can appear in the shopping list.",
+                    color = Muted,
                 )
                 Text(
                     "Expired items, storage locations, purchase dates, and inventory history are not sent. If configured, the API key is sent separately as an authorization header and is never included in the meal prompt.",
@@ -1173,11 +1208,13 @@ private fun NetworkMealDisclosureDialog(
 private fun MealCard(
     meal: MealProposal,
     onCook: () -> Unit,
+    onEditIngredients: (List<MealIngredient>) -> Unit,
     onDelete: () -> Unit,
     onAddMissing: () -> Unit,
 ) {
     var confirmCook by remember { mutableStateOf(false) }
     var confirmDelete by remember { mutableStateOf(false) }
+    var editQuantities by remember { mutableStateOf(false) }
     val rescued = meal.allocations.filter { it.rescued }.map { it.name }.distinct()
     Card(colors = CardDefaults.cardColors(containerColor = Color.White), shape = RoundedCornerShape(18.dp)) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -1206,16 +1243,30 @@ private fun MealCard(
             if (meal.safetyNote.isNotBlank()) Text("Safety: ${meal.safetyNote}", color = Danger)
             when (meal.status) {
                 MealStatus.COOKED -> Text("✓ Cooked • pantry updated", color = Leaf, fontWeight = FontWeight.Bold)
-                MealStatus.SUGGESTED -> if (meal.allocations.isEmpty()) {
-                    Text("Generate a fresh suggestion to enable pantry deduction.", color = Muted)
-                } else {
-                    Button(onClick = { confirmCook = true }) { Text("Cook & deduct pantry") }
+                MealStatus.SUGGESTED -> {
+                    OutlinedButton(onClick = { editQuantities = true }) { Text("Edit quantities") }
+                    if (meal.allocations.isEmpty()) {
+                        Text("No matching pantry ingredients are currently allocated.", color = Muted)
+                    } else {
+                        Button(onClick = { confirmCook = true }) { Text("Cook & deduct pantry") }
+                    }
                 }
             }
             TextButton(onClick = { confirmDelete = true }) {
                 Text("Delete saved meal", color = Danger)
             }
         }
+    }
+
+    if (editQuantities) {
+        EditMealIngredientQuantitiesDialog(
+            meal = meal,
+            onDismiss = { editQuantities = false },
+            onConfirm = { ingredients ->
+                editQuantities = false
+                onEditIngredients(ingredients)
+            },
+        )
     }
 
     if (confirmCook) {
@@ -1259,6 +1310,62 @@ private fun MealCard(
             dismissButton = { TextButton(onClick = { confirmDelete = false }) { Text("Cancel") } },
         )
     }
+}
+
+@Composable
+private fun EditMealIngredientQuantitiesDialog(
+    meal: MealProposal,
+    onDismiss: () -> Unit,
+    onConfirm: (List<MealIngredient>) -> Unit,
+) {
+    var quantityTexts by remember(meal.id, meal.ingredients) {
+        mutableStateOf(meal.ingredients.map { formatMilli(it.quantityMilli) })
+    }
+    val parsedQuantities = quantityTexts.map(::parseMilli)
+    val valid = parsedQuantities.all { it != null && it > 0 }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Edit ingredient quantities") },
+        text = {
+            Column(
+                Modifier.verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                Text("These are total quantities for ${meal.servings} servings. Saving recalculates what Cook & deduct pantry will remove.")
+                meal.ingredients.forEachIndexed { index, ingredient ->
+                    OutlinedTextField(
+                        value = quantityTexts[index],
+                        onValueChange = { value ->
+                            quantityTexts = quantityTexts.toMutableList().also { it[index] = value }
+                        },
+                        label = { Text(ingredient.name) },
+                        supportingText = { Text("Unit: ${ingredient.unit}") },
+                        isError = parsedQuantities[index]?.let { it <= 0 } ?: quantityTexts[index].isNotBlank(),
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true,
+                    )
+                }
+                Text(
+                    "If the pantry has less than the new amount, the remainder will move to Missing and will not be deducted.",
+                    color = Muted,
+                    style = MaterialTheme.typography.bodySmall,
+                )
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = {
+                    onConfirm(meal.ingredients.mapIndexed { index, ingredient ->
+                        ingredient.copy(quantityMilli = requireNotNull(parsedQuantities[index]))
+                    })
+                },
+                enabled = valid,
+            ) { Text("Save quantities") }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+    )
 }
 
 private fun mealTypeOrder(mealType: String?): Int = when (mealType?.lowercase()) {

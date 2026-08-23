@@ -37,6 +37,7 @@ object MealPlanningPolicy {
         requestedServings: Int,
         maxMinutes: Int,
         today: LocalDate = LocalDate.now(),
+        pantryOnly: Boolean = false,
     ): MealProposal {
         require(meal.servings == requestedServings) {
             "The meal suggestion did not honor the requested serving count."
@@ -79,6 +80,13 @@ object MealPlanningPolicy {
             if (remainingBase > 0) {
                 missing += ingredient.copy(quantityMilli = fromBaseRoundedUp(remainingBase, ingredient.unit))
             }
+        }
+
+        if (pantryOnly && missing.isNotEmpty()) {
+            val unavailable = missing.joinToString(limit = 4) { it.name }
+            throw IllegalArgumentException(
+                "The suggestion needs unavailable pantry quantities for $unavailable. Try another meal or turn off pantry-only mode.",
+            )
         }
 
         if (requiredItem != null) {

@@ -71,6 +71,7 @@ object WeeklyMealPlanningPolicy {
         requestedServings: Int,
         maxMinutes: Int,
         today: LocalDate = LocalDate.now(),
+        pantryOnly: Boolean = false,
     ): List<MealProposal> {
         val eligible = MealPlanningPolicy.eligiblePantry(pantry, today)
         val reconciled = mutableListOf<MealProposal>()
@@ -83,6 +84,7 @@ object WeeklyMealPlanningPolicy {
                 requestedServings = requestedServings,
                 maxMinutes = maxMinutes,
                 today = today,
+                pantryOnly = pantryOnly,
             )
         }
         MealPlanningPolicy.requiredExpiryItem(eligible, today)?.let { earliest ->
@@ -103,6 +105,7 @@ object WeeklyMealPrompt {
         maxMinutes: Int,
         preference: String,
         schedule: List<MealScheduleSlot>,
+        pantryOnly: Boolean = true,
     ): String {
         require(schedule.isNotEmpty()) { "A schedule needs at least one meal slot." }
         val inventory = MealPlanningPolicy.eligiblePantry(pantry).map {
@@ -120,7 +123,7 @@ object WeeklyMealPrompt {
             Create exactly ${schedule.size} simple meals, one for every requested date and meal type below, with no duplicate or missing slots.
             Every meal must serve exactly $servings people and take no more than $maxMinutes minutes.
             Prefer the earliest-expiring safe pantry items in the earliest meals. Across the complete schedule, do not use more than the listed pantry quantities.
-            Ingredients not present in the pantry are allowed because the app will add them to one shopping list.
+            ${if (pantryOnly) "Use ONLY ingredients listed in the pantry. Do not add missing staples, oil, spices, water, garnishes, or optional ingredients. Across the full schedule, every ingredient and its full quantity must be available." else "Ingredients not present in the pantry are allowed because the app will add them to one shopping list."}
             Keep the output TL;DR: use a short title, a short cuisine label, no more than 8 essential ingredients with total quantities for all $servings servings, 2 to 3 very short preparation steps, and only a brief safety note when needed.
             Do not add optional garnishes, explanations, rationales, substitutions, serving suggestions, or repeated commentary.
             Keep breakfast appropriate for breakfast, lunch for lunch, and dinner for dinner. Vary the meals and follow the cuisine preference.

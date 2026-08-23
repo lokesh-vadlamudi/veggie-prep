@@ -40,7 +40,7 @@ the destination and a preview before sending data. The request can contain:
 - pantry item names;
 - quantities and units;
 - expiry dates; and
-- the requested servings, time limit, and meal preference.
+- the requested servings, time limit, pantry-only choice, and custom meal instructions.
 
 A meal schedule sends one request containing the pantry preview and all
 requested dates and meal types. The app validates the complete response and
