@@ -16,7 +16,7 @@ class MealPromptPrivacyTest {
                     unit = "count",
                     location = "private-freezer-label",
                     purchasedOn = "2026-08-01",
-                    expiresOn = "2026-08-22",
+                    expiresOn = "2026-08-30",
                 ),
             ),
             servings = 2,
@@ -25,7 +25,7 @@ class MealPromptPrivacyTest {
         )
 
         assertTrue(prompt.contains("Carrots"))
-        assertTrue(prompt.contains("2026-08-22"))
+        assertTrue(prompt.contains("2026-08-30"))
         assertTrue(prompt.contains("spicy"))
         assertTrue(prompt.contains("Use ONLY ingredients listed in the pantry"))
         assertFalse(prompt.contains("location"))

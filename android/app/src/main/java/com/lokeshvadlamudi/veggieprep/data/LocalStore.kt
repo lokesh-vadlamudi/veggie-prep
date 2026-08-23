@@ -309,14 +309,42 @@ class LocalStore(
         updateLotDetails(listOf(lotId), name, expiresOn, icon)
     }
 
-    fun updateLotDetails(lotIds: List<Long>, name: String, expiresOn: String?, icon: String?) {
+    fun updateLotDetails(
+        lotIds: List<Long>,
+        name: String,
+        expiresOn: String?,
+        icon: String?,
+        targetQuantityMilli: Long? = null,
+    ) {
         require(lotIds.isNotEmpty())
+        targetQuantityMilli?.let { require(it > 0) { "Enter a positive quantity with up to 3 decimal places." } }
         val normalizedName = name.trim()
         require(normalizedName.isNotEmpty() && normalizedName.length <= 200) { "Enter an item name up to 200 characters." }
         val normalizedIcon = icon?.trim().orEmpty()
         require(normalizedIcon.length <= 16) { "Choose one short icon." }
         writableDatabase.inTransaction {
-            lotIds.distinct().forEach { lotId ->
+            val distinctLotIds = lotIds.distinct()
+            targetQuantityMilli?.let { target ->
+                val balances = distinctLotIds.map { lotId -> lotId to balanceFor(this, lotId) }
+                val currentTotal = balances.sumOf { it.second }
+                val difference = target - currentTotal
+                val now = System.currentTimeMillis()
+                if (difference > 0) {
+                    insertEvent(this, balances.first().first, "ADJUST", difference, "Quantity edited on phone", now)
+                } else if (difference < 0) {
+                    var reductionRemaining = -difference
+                    balances.forEach { (lotId, available) ->
+                        if (reductionRemaining == 0L) return@forEach
+                        val reduction = minOf(available, reductionRemaining)
+                        if (reduction > 0) {
+                            insertEvent(this, lotId, "ADJUST", -reduction, "Quantity edited on phone", now)
+                            reductionRemaining -= reduction
+                        }
+                    }
+                    require(reductionRemaining == 0L) { "Quantity cannot go below zero." }
+                }
+            }
+            distinctLotIds.forEach { lotId ->
                 val updated = update(
                     "stock_lots",
                     ContentValues().apply {
@@ -325,12 +353,27 @@ class LocalStore(
                         if (normalizedExpiry.isEmpty()) putNull("expires_on") else put("expires_on", normalizedExpiry)
                         put("expiry_estimated", 0)
                         if (normalizedIcon.isEmpty()) putNull("icon") else put("icon", normalizedIcon)
+                        if (targetQuantityMilli != null) put("quantity_estimated", 0)
                     },
                     "id = ?",
                     arrayOf(lotId.toString()),
                 )
                 require(updated == 1) { "That pantry item is no longer available." }
             }
+        }
+    }
+
+    fun deleteLots(lotIds: List<Long>) {
+        val distinctLotIds = lotIds.distinct()
+        require(distinctLotIds.isNotEmpty()) { "That pantry item is no longer available." }
+        writableDatabase.inTransaction {
+            val placeholders = distinctLotIds.joinToString(",") { "?" }
+            val deleted = delete(
+                "stock_lots",
+                "id IN ($placeholders)",
+                distinctLotIds.map(Long::toString).toTypedArray(),
+            )
+            require(deleted == distinctLotIds.size) { "That pantry item is no longer available." }
         }
     }
 

@@ -183,6 +183,32 @@ class LocalStoreMealFlowInstrumentedTest {
         assertEquals(6_000L, remaining.single().quantityMilli)
     }
 
+    @Test fun editsAndDeletesACombinedPantryQuantity() {
+        val first = store.addLot("Eggs", 12_000, "count", "fridge", "2026-08-22", "2026-09-19")
+        val second = store.addLot("Eggs", 12_000, "count", "fridge", "2026-08-22", "2026-09-19")
+
+        store.updateLotDetails(
+            lotIds = listOf(first, second),
+            name = "Eggs",
+            expiresOn = "2026-09-19",
+            icon = "🥚",
+            targetQuantityMilli = 18_000,
+        )
+        assertEquals(18_000L, store.listPantry().sumOf { it.quantityMilli })
+
+        store.updateLotDetails(
+            lotIds = listOf(first, second),
+            name = "Eggs",
+            expiresOn = "2026-09-19",
+            icon = "🥚",
+            targetQuantityMilli = 30_000,
+        )
+        assertEquals(30_000L, store.listPantry().sumOf { it.quantityMilli })
+
+        store.deleteLots(listOf(first, second))
+        assertTrue(store.listPantry().isEmpty())
+    }
+
     private fun plannedMeal(title: String, day: String, mealType: String) = MealProposal(
         title = title,
         servings = 2,

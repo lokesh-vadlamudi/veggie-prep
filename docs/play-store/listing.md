@@ -38,6 +38,7 @@ Key features:
 - On-device receipt scan or photo import with review before saving
 - Offline catalog of 450+ household foods and regional aliases
 - Editable expiry dates for existing pantry items
+- Exact pantry quantity editing and confirmed permanent deletion
 - Dedicated Snacks section for available snacks
 - Expiry-first meal planning that skips expired ingredients
 - Configurable multi-day breakfast, lunch, and dinner planning in one AI request

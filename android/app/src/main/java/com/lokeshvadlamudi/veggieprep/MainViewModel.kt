@@ -24,6 +24,7 @@ import com.lokeshvadlamudi.veggieprep.data.MealStatus
 import com.lokeshvadlamudi.veggieprep.data.PantryItem
 import com.lokeshvadlamudi.veggieprep.data.ShoppingItem
 import com.lokeshvadlamudi.veggieprep.data.WeeklyPlan
+import com.lokeshvadlamudi.veggieprep.data.groupMatchingPantryItems
 import com.lokeshvadlamudi.veggieprep.receipt.ReceiptCandidate
 import com.lokeshvadlamudi.veggieprep.receipt.ReceiptDraft
 import com.lokeshvadlamudi.veggieprep.receipt.ReceiptOcr
@@ -127,11 +128,22 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    fun updateItemDetails(items: List<PantryItem>, name: String, expiresOn: String, icon: String) {
+    fun updateItemDetails(
+        items: List<PantryItem>,
+        name: String,
+        quantityText: String,
+        expiresOn: String,
+        icon: String,
+    ) {
         if (items.isEmpty()) return
         val normalizedName = name.trim()
         if (normalizedName.isEmpty() || normalizedName.length > 200) {
             showError("Enter an item name up to 200 characters.")
+            return
+        }
+        val quantity = com.lokeshvadlamudi.veggieprep.data.parseMilli(quantityText)
+        if (quantity == null || quantity <= 0) {
+            showError("Enter a positive quantity with up to 3 decimal places.")
             return
         }
         val normalized = expiresOn.trim()
@@ -146,12 +158,35 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
         viewModelScope.launch(Dispatchers.IO) {
             runCatching {
-                database.updateLotDetails(items.map(PantryItem::id), normalizedName, normalized, normalizedIcon)
+                database.updateLotDetails(
+                    lotIds = items.map(PantryItem::id),
+                    name = normalizedName,
+                    expiresOn = normalized,
+                    icon = normalizedIcon,
+                    targetQuantityMilli = quantity,
+                )
                 database.listPantry()
             }.onSuccess { pantry ->
                 mutableState.value = mutableState.value.copy(
                     pantry = pantry,
                     status = "$normalizedName updated",
+                    error = null,
+                )
+            }.onFailure { showError(it.safeMessage()) }
+        }
+    }
+
+    fun deleteItems(items: List<PantryItem>) {
+        if (items.isEmpty()) return
+        val name = groupMatchingPantryItems(items).single().summary.name
+        viewModelScope.launch(Dispatchers.IO) {
+            runCatching {
+                database.deleteLots(items.map(PantryItem::id))
+                database.listPantry()
+            }.onSuccess { pantry ->
+                mutableState.value = mutableState.value.copy(
+                    pantry = pantry,
+                    status = "$name deleted",
                     error = null,
                 )
             }.onFailure { showError(it.safeMessage()) }

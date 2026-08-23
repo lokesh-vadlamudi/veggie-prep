@@ -255,6 +255,7 @@ private fun VeggiePrepApp(viewModel: MainViewModel) {
                     onAdd = viewModel::addItem,
                     onUse = viewModel::useItems,
                     onUpdateDetails = viewModel::updateItemDetails,
+                    onDelete = viewModel::deleteItems,
                     onScanReceipt = ::startReceiptScan,
                     onChooseReceiptPhoto = { receiptPhotoPicker.launch("image/*") },
                 )
@@ -263,6 +264,7 @@ private fun VeggiePrepApp(viewModel: MainViewModel) {
                     onAdd = viewModel::addItem,
                     onUse = viewModel::useItems,
                     onUpdateDetails = viewModel::updateItemDetails,
+                    onDelete = viewModel::deleteItems,
                     heading = "Available snacks",
                     emptyTitle = "No snacks yet",
                     emptyDetail = "Add chips, biscuits, namkeen, sweets, bakery items, or any custom snack.",
@@ -302,7 +304,8 @@ private fun PantryScreen(
     pantry: List<PantryItem>,
     onAdd: (String, String, String, String, String, String, String) -> Unit,
     onUse: (List<PantryItem>, String, Boolean) -> Unit,
-    onUpdateDetails: (List<PantryItem>, String, String, String) -> Unit,
+    onUpdateDetails: (List<PantryItem>, String, String, String, String) -> Unit,
+    onDelete: (List<PantryItem>) -> Unit,
     onScanReceipt: (() -> Unit)? = null,
     onChooseReceiptPhoto: (() -> Unit)? = null,
     heading: String = "Use soon",
@@ -316,6 +319,7 @@ private fun PantryScreen(
     var search by rememberSaveable { mutableStateOf("") }
     var actionItems by remember { mutableStateOf<List<PantryItem>?>(null) }
     var editItems by remember { mutableStateOf<List<PantryItem>?>(null) }
+    var pendingDeleteItems by remember { mutableStateOf<List<PantryItem>?>(null) }
     var discard by remember { mutableStateOf(false) }
     val groupedPantry = remember(pantry) { groupMatchingPantryItems(pantry) }
     val visibleGroups = remember(groupedPantry, search) {
@@ -363,6 +367,7 @@ private fun PantryScreen(
                         onUse = { actionItems = group.lots; discard = false },
                         onEdit = { editItems = group.lots },
                         onDiscard = { actionItems = group.lots; discard = true },
+                        onDelete = { pendingDeleteItems = group.lots },
                     )
                 }
             }
@@ -424,7 +429,22 @@ private fun PantryScreen(
             item = groupMatchingPantryItems(items).single().summary,
             matchingEntries = items.size,
             onDismiss = { editItems = null },
-            onConfirm = { name, expiry, icon -> onUpdateDetails(items, name, expiry, icon); editItems = null },
+            onConfirm = { name, quantity, expiry, icon ->
+                onUpdateDetails(items, name, quantity, expiry, icon)
+                editItems = null
+            },
+        )
+    }
+    pendingDeleteItems?.let { items ->
+        val group = groupMatchingPantryItems(items).single()
+        DeletePantryItemDialog(
+            item = group.summary,
+            matchingEntries = group.lots.size,
+            onDismiss = { pendingDeleteItems = null },
+            onConfirm = {
+                onDelete(items)
+                pendingDeleteItems = null
+            },
         )
     }
 }
@@ -590,6 +610,7 @@ private fun PantryCard(
     onUse: () -> Unit,
     onEdit: () -> Unit,
     onDiscard: () -> Unit,
+    onDelete: () -> Unit,
 ) {
     Card(colors = CardDefaults.cardColors(containerColor = Color.White), shape = RoundedCornerShape(18.dp)) {
         Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -638,6 +659,7 @@ private fun PantryCard(
                 Button(onClick = onUse) { Text("Use") }
                 TextButton(onClick = onEdit) { Text("Edit") }
                 TextButton(onClick = onDiscard) { Text("Discard", color = Danger) }
+                TextButton(onClick = onDelete) { Text("Delete", color = Danger) }
             }
         }
     }
@@ -844,12 +866,14 @@ private fun ItemDetailsDialog(
     item: PantryItem,
     matchingEntries: Int,
     onDismiss: () -> Unit,
-    onConfirm: (String, String, String) -> Unit,
+    onConfirm: (String, String, String, String) -> Unit,
 ) {
     var name by rememberSaveable(item.id) { mutableStateOf(item.name) }
+    var quantity by rememberSaveable(item.id) { mutableStateOf(item.quantityText) }
     var expires by rememberSaveable(item.id) { mutableStateOf(item.expiresOn.orEmpty()) }
     var icon by rememberSaveable(item.id) { mutableStateOf(item.icon.orEmpty()) }
     val defaultIcon = IndianIngredientCatalog.find(item.name)?.visual ?: "🧺"
+    val parsedQuantity = parseMilli(quantity)
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("Edit ${item.name}") },
@@ -865,6 +889,21 @@ private fun ItemDetailsDialog(
                     supportingText = {
                         if (matchingEntries > 1) Text("This renames all $matchingEntries matching entries in this card.")
                     },
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true,
+                )
+                OutlinedTextField(
+                    value = quantity,
+                    onValueChange = { quantity = it },
+                    label = { Text("Total quantity (${item.unit})") },
+                    supportingText = {
+                        Text(
+                            if (matchingEntries > 1) "Sets the combined total across all $matchingEntries matching entries."
+                            else "Sets the exact quantity currently available.",
+                        )
+                    },
+                    isError = quantity.isNotBlank() && (parsedQuantity == null || parsedQuantity <= 0),
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
                     modifier = Modifier.fillMaxWidth(),
                     singleLine = true,
                 )
@@ -896,8 +935,35 @@ private fun ItemDetailsDialog(
             }
         },
         confirmButton = {
-            Button(onClick = { onConfirm(name, expires, icon) }, enabled = name.isNotBlank()) { Text("Save") }
+            Button(
+                onClick = { onConfirm(name, quantity, expires, icon) },
+                enabled = name.isNotBlank() && parsedQuantity != null && parsedQuantity > 0,
+            ) { Text("Save") }
         },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+    )
+}
+
+@Composable
+private fun DeletePantryItemDialog(
+    item: PantryItem,
+    matchingEntries: Int,
+    onDismiss: () -> Unit,
+    onConfirm: () -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Delete ${item.name}?") },
+        text = {
+            Text(
+                buildString {
+                    append("This permanently removes ${item.quantityText} ${item.unit} and its inventory history from this phone")
+                    if (matchingEntries > 1) append(", including all $matchingEntries matching entries")
+                    append(". This cannot be undone. Saved meals that reference it may need to be generated again.")
+                },
+            )
+        },
+        confirmButton = { Button(onClick = onConfirm) { Text("Delete permanently") } },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
     )
 }
